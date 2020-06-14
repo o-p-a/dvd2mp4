@@ -1,0 +1,321 @@
+#! /usr/bin/ruby -E:UTF-8
+# -*- mode:Ruby; tab-width:4; coding:UTF-8; -*-
+# vi:set ft=ruby ts=4 fenc=UTF-8 :
+#----------------------------------------------------------------
+# DVD IFO VOBをmp4に変換する
+#
+# 2020/06/14 opa
+#----------------------------------------------------------------
+ProgName = "dvd2mp4"
+Version = "0.01"
+#=====dpk===== Copyright2020
+Copyright = "Copyright (c) 2020 by opa"
+#=====dpk=====
+FFMPEG_CMD = "ffmpeg"
+FFPROBE_CMD = "ffprobe"
+LSDVD_CMD = "lsdvd"
+
+LANGTABLE = {
+	"ja" => "jpn",
+}
+
+require 'optparse'
+require 'open3'
+require 'json'
+require 'pp'
+
+def var_init
+	$PROGRAM_NAME = ProgName
+	$probe = false
+	$crf = 20.0
+	$start_sec = nil
+	$duration_sec = nil
+	$meta_album_name = nil
+	$meta_title_name = nil
+	$meta_track_num = nil
+	$overwrite = false
+	$skipvob = nil
+	$dryrun = false
+	$rcode = 0
+end
+
+def probe_a_title(title_num)
+	pipe_r, pipe_w = IO.pipe
+
+	cmd = [LSDVD_CMD]
+	cmd += ["-x"]
+	cmd += ["-Or", "."]
+	lsdvd_data = eval(Open3.capture3(*cmd)[0])
+
+	track_data = lsdvd_data[:track].find { |t| t[:ix] == title_num }
+	vts_num = nil
+	if !track_data
+		$stderr.printf("タイトル番号%dの情報がありません\n", title_num)
+		$rcode = 1
+		fail
+	end
+	vts_num = track_data[:vts].to_i
+	if !vts_num
+		$stderr.printf("タイトル番号%dに対応するvts番号がありません\n", title_num)
+		$rcode = 1
+		fail
+	end
+
+	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num)).sort
+	vobfiles.shift($skipvob)  if $skipvob
+
+	cmd1 = ["cat"]
+	cmd1 += vobfiles
+
+	cmd2 = [FFPROBE_CMD]
+	cmd2 += ["-hide_banner"]
+	cmd2 += ["-loglevel", "error"]
+	cmd2 += ["-analyzeduration", "120M"]
+	cmd2 += ["-probesize", "120M"]
+	cmd2 += ["-print_format", "json"]
+	cmd2 += ["-show_format"]
+	cmd2 += ["-show_streams"]
+	cmd2 += ["-"]
+	ffprobe_data = JSON.parse(Open3.pipeline_r(cmd1, cmd2)[0].read, symbolize_names:true)
+
+	return {ffprobe:ffprobe_data, lsdvd:lsdvd_data, lsdvd_track_data:track_data, vts:vts_num}
+end
+
+def dvd2mp4(title_num)
+	if title_num =~ /$VTS_(\d+)$/i
+		title_num = $1.to_i
+	else
+		title_num = title_num.to_i
+	end
+
+	if title_num < 1
+		$stderr.printf("トラック番号(>0)を指定してください\n")
+		$rcode = 1
+		return
+	end
+
+	probe_data = probe_a_title(title_num)
+
+	if $probe
+		pp probe_data
+		return
+	end
+
+	track_data = probe_data[:lsdvd_track_data]
+	return  if !track_data
+	vts_num = probe_data[:vts]
+	return  if !vts_num
+
+	# ファイルのメタ情報を決定
+
+	if !$meta_album_name
+		if probe_data[:lsdvd][:title] && probe_data[:lsdvd][:title] != "unknown"
+			$meta_album_name = probe_data[:lsdvd][:title]
+			$stdout.printf("アルバム名をディスク情報から得た %s とします\n", $meta_album_name)
+		end
+	end
+
+	# ストリームのマッピングを決定
+
+	streams_v = []
+	streams_v_count = 0
+	streams_a = []
+	streams_a_count = 0
+	streams_s = []
+	streams_s_count = 0
+	for stream_num in 1..999
+		stream = probe_data[:ffprobe][:streams].find { |s| s[:index] == stream_num }
+		break  if !stream
+
+		stream[:ffid] = "0:#{stream[:index]}"
+
+		case stream[:codec_type]
+		when "video"
+			streams_v_count += 1
+			streams_v << stream
+		when "audio"
+			streams_a_count += 1
+
+			lsdvd_data = track_data[:audio].find { |s| s[:ix] == streams_a_count }
+			lsdvd_data = track_data[:audio].first  if !lsdvd_data
+			if lsdvd_data && lsdvd_data[:langcode]
+				stream[:lang] = LANGTABLE[lsdvd_data[:langcode]]
+			end
+			if !stream[:lang]
+				$stderr.printf("言語情報が取得できません: %s\n", lsdvd_data[:langcode])
+				$rcode = 1
+				fail
+			end
+
+			stream[:desc] = "#{lsdvd_data[:language]} #{stream[:codec_long_name]} #{stream[:channel_layout]}"
+			streams_a << stream
+		when "subtitle"
+			streams_s_count += 1
+
+			lsdvd_data = track_data[:subp].find { |s| p streams_s_count;p s[:ix]; s[:ix] == streams_s_count }
+			lsdvd_data = track_data[:subp].first  if !lsdvd_data
+			if lsdvd_data && lsdvd_data[:langcode]
+				stream[:lang] = LANGTABLE[lsdvd_data[:langcode]]
+			end
+			if !stream[:lang]
+				$stderr.printf("言語情報が取得できません: %s\n", lsdvd_data[:langcode])
+				$rcode = 1
+				fail
+			end
+
+			stream[:desc] = "#{lsdvd_data[:language]} #{stream[:codec_long_name]}"
+			streams_s << stream
+		end
+	end
+
+	# チャプター情報を決定
+
+
+
+
+	# ここから変換本体
+
+	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num)).sort
+	vobfiles.shift($skipvob)  if $skipvob
+
+	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num)).sort
+	ifofile = ifofiles.empty? ? nil : ifofiles.first
+
+	cmd1 = ["cat"]
+	cmd1 += vobfiles
+
+	cmd2 = [FFMPEG_CMD]
+	cmd2 += ["-hide_banner"]
+	cmd2 += ["-loglevel", "info"]
+	cmd2 += ["-analyzeduration", "120M"]
+	cmd2 += ["-probesize", "120M"]
+	cmd2 += ["-y"]  if $overwrite
+	cmd2 += ["-ifo_palette", ifofile]  if ifofile
+	cmd2 += ["-i", "-"]
+
+	cmd2 += ["-f", "mp4"]
+	cmd2 += ["-preset", "veryslow"]
+	cmd2 += ["-codec:s", "dvd_subtitle"]
+	cmd2 += ["-movflags", "faststart"]
+	cmd2 += ["-crf", $crf.to_s]
+	cmd2 += ["-metadata", "album=#{$meta_album_name}"]  if $meta_album_name
+	cmd2 += ["-metadata", "track=#{$meta_track_num}"]  if $meta_track_num
+	cmd2 += ["-metadata", "title=#{$meta_title_name}"]  if $meta_title_name
+	cmd2 += ["-ss", $start_sec.to_s]  if $start_sec
+	cmd2 += ["-t", $duration_sec.to_s]  if $duration_sec
+
+	scount = 0
+
+	streams_v.each do |stream|
+		cmd2 += ["-map", stream[:ffid]]
+		scount += 1
+	end
+
+	streams_a.each do |stream|
+		cmd2 += ["-map", stream[:ffid]]
+		cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+		cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:desc]}"]
+		cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:desc]}"]
+		scount += 1
+	end
+
+	streams_s.each do |stream|
+		cmd2 += ["-map", stream[:ffid]]
+		cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+		cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:desc]}"]
+		cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:desc]}"]
+		scount += 1
+	end
+
+	if $meta_title_name
+		if $meta_track_num
+			cmd2 += ["#{$meta_track_num} #{$meta_title_name}.mp4"]
+		else
+			cmd2 += ["#{$meta_title_name}.mp4"]
+		end
+	else
+		cmd2 += [sprintf("title_%02d.mp4", title_num)]
+	end
+
+	if $dryrun
+		p cmd1
+		p cmd2
+	else
+		Open3.pipeline(cmd1, cmd2)
+	end
+end
+
+def main(args)
+	var_init
+
+	args.options do |opt|
+		opt.banner = "#{ProgName} v#{Version} #{Copyright}\n" +
+						"Usage: #{ProgName} [options] VTS_nn..."
+
+		opt.on("-p", "--[no-]probe",
+			"ファイルの情報を表示する") do |v|
+			$probe = v
+		end
+
+		opt.on("--crf=n", Float,
+			"VBR画質を指定する(0:高 〜 20.0:デフォルト)") do |v|
+			$crf = v
+		end
+
+		opt.on("--startpoint=s", Float,
+			"開始位置を指定する(秒)") do |v|
+			$start_sec = v
+		end
+
+		opt.on("-d", "--duration=s", Float,
+			"出力する秒数を指定する") do |v|
+			$duration_sec = v
+		end
+
+		opt.on("--album_name=s", String,
+			"アルバム名を指定") do |v|
+			$meta_album_name = v
+		end
+
+		opt.on("--title=s", String,
+			"タイトルを指定") do |v|
+			$meta_title_name = v
+		end
+
+		opt.on("--track_num=n", String,
+			"トラック番号を指定") do |v|
+			$meta_track_num = v
+		end
+
+		opt.on("-y", "--[no-]overwrite",
+			"出力ファイルが既に存在しても上書きする") do |v|
+			$overwrite = v
+		end
+
+		opt.on("--track_num=n", String,
+			"トラック番号を指定") do |v|
+			$meta_track_num = v
+		end
+
+		opt.on("--skipvobs=n", Integer,
+			"先頭のn個のVOBファイルをスキップする") do |v|
+			$skipvob = v
+		end
+
+		opt.on("--[no-]dry-run",
+			"変換処理を実際には行わない") do |v|
+			$dryrun = v
+		end
+
+		opt.parse!
+		print(opt.help)  if args.empty?
+	end
+
+	args.each do |arg|
+		dvd2mp4(arg)
+	end
+
+	return $rcode
+end
+
+exit main(ARGV)
