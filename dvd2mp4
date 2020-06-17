@@ -22,6 +22,7 @@ LANGTABLE = {
 require 'optparse'
 require 'open3'
 require 'json'
+require 'tempfile'
 require 'pp'
 
 def var_init
@@ -39,16 +40,53 @@ def var_init
 	$rcode = 0
 end
 
-def probe_a_title(title_num)
-	pipe_r, pipe_w = IO.pipe
+def sec2hhmmss(sec, full:false)
+	r = ""
+	d, m = sec.divmod(1) # 秒以下
+	r = sprintf(".%03d", (m * 1000).round)  if m != 0 || full
+	d, m = d.divmod(60) # 秒
+	r = sprintf("%02d", m) + r
+	if d > 0 || full
+		d, m = d.divmod(60) # 分
+		r = sprintf("%02d:", m) + r
+	end
+	if d > 0 || full
+		d, m = d.divmod(60) # 時
+		r = sprintf("%02d:", m) + r
+	end
+	return r
+end
 
+def title_num_to_i(title_num)
+	if title_num =~ /$VTS_(\d+)$/i
+		i = $1.to_i
+	else
+		i = title_num.to_i
+	end
+	if i < 1
+		fail "タイトル番号の指定が不正です: #{title_num}"
+	end
+	return i
+end
+
+def probe_disc_data
 	cmd = [LSDVD_CMD]
 	cmd += ["-x"]
 	cmd += ["-Or", "."]
-	lsdvd_data = eval(Open3.capture3(*cmd)[0])
+	r = Open3.capture3(*cmd)
+
+	if r[0] == ""
+		printf("%s\n", r[1])
+		fail "lsdvdの実行に失敗しました"
+	end
+
+	return {lsdvd:eval(r[0])}
+end
+
+def probe_title_data(title_num)
+	lsdvd_data = probe_disc_data[:lsdvd]
 
 	track_data = lsdvd_data[:track].find { |t| t[:ix] == title_num }
-	vts_num = nil
 	if !track_data
 		$stderr.printf("タイトル番号%dの情報がありません\n", title_num)
 		$rcode = 1
@@ -61,8 +99,33 @@ def probe_a_title(title_num)
 		fail
 	end
 
+	vts_chapters = []
+	lsdvd_data[:track].each do |track|
+		if track[:vts] == vts_num
+			track[:chapter].each do |chapter|
+				cell = track[:cell].find { |c| c[:ix] == chapter[:startcell] }
+				vts_chapters << {
+					title: track[:ix],
+					ttn: track[:ttn],
+					ix: chapter[:ix],
+					length: chapter[:length],
+					first_sector: cell[:first_sector],
+					last_sector: cell[:last_sector],
+				}
+			end
+		end
+	end
+	vts_chapters.sort_by! { |c| c[:first_sector] }
+	ctmap = {0 => 0.0}
+	vts_chapters.each do |chapter|
+		chapter[:start] = ctmap[chapter[:first_sector]].round(6)
+		ctmap[chapter[:last_sector] + 1] = chapter[:start] + chapter[:length]
+		chapter[:end] = ctmap[chapter[:last_sector] + 1].round(6)
+	end
+
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num)).sort
 	vobfiles.shift($skipvob)  if $skipvob
+	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
 
 	cmd1 = ["cat"]
 	cmd1 += vobfiles
@@ -78,33 +141,88 @@ def probe_a_title(title_num)
 	cmd2 += ["-"]
 	ffprobe_data = JSON.parse(Open3.pipeline_r(cmd1, cmd2)[0].read, symbolize_names:true)
 
-	return {ffprobe:ffprobe_data, lsdvd:lsdvd_data, lsdvd_track_data:track_data, vts:vts_num}
+	return {
+		ffprobe:ffprobe_data,
+		lsdvd:lsdvd_data,
+		lsdvd_track_data:track_data,
+		vts:vts_num,
+		vts_chapters:vts_chapters,
+	}
+end
+
+def probe_disc
+	probe_data = probe_disc_data
+	lsdvd = probe_data[:lsdvd]
+
+	printf("disc title : %s\n", lsdvd[:title])
+#	printf("vmg_id : %s\n", lsdvd[:vmg_id])
+	printf("provider id : %s\n", lsdvd[:provider_id])
+	printf("longest title : %d\n", lsdvd[:longest_track])  if lsdvd[:track].count > 1
+
+	lsdvd[:track].each do |track|
+		printf("Title %d : VTS_%02d-%d", track[:ix], track[:vts], track[:ttn])
+		printf(" %dx%d(%s) %0.2ffps %0.1fs", track[:width], track[:height], track[:aspect], track[:fps], track[:length])
+		printf("(%s)", sec2hhmmss(track[:length]))  if track[:length] > 60
+		aux = ""
+		aux += sprintf(" angle:%d", track[:angles])  if track[:angles] != 1
+		aux += sprintf(" chpt:%d", track[:chapter].count)  if track[:chapter].count != 1
+		aux += sprintf(" audio:%d", track[:audio].count)  if track[:audio].count != 1
+		aux += sprintf(" subt:%d", track[:subp].count)  if track[:subp].count != 0
+		print(" /" + aux)  if !aux.empty?
+		print("\n")
+	end
+end
+
+def probe_title(title_num)
+	title_num = title_num_to_i(title_num)
+
+	probe_data = probe_title_data(title_num)
+	lsdvd = probe_data[:lsdvd]
+	track = probe_data[:lsdvd_track_data]
+
+	printf("Title %d : VTS_%02d-%d", track[:ix], track[:vts], track[:ttn])
+	printf(" %dx%d(%s) %0.2ffps %0.1fs", track[:width], track[:height], track[:aspect], track[:fps], track[:length])
+	printf("(%s)", sec2hhmmss(track[:length]))  if track[:length] > 60
+	aux = ""
+	aux += sprintf(" angle:%d", track[:angles])  if track[:angles] != 1
+	aux += sprintf(" chpt:%d", track[:chapter].count)  if track[:chapter].count != 1
+	aux += sprintf(" audio:%d", track[:audio].count)  if track[:audio].count != 1
+	aux += sprintf(" subt:%d", track[:subp].count)  if track[:subp].count != 0
+	print(" /" + aux)  if !aux.empty?
+	print("\n")
+
+	if track[:angles] != 1
+		printf("Angle %d :", 1)
+		print(" 複数アングルがあります\n")
+	end
+
+	probe_data[:vts_chapters].each_with_index do |chapter, i|
+		printf("Chapter %d :", i + 1)
+		printf(" %s - %s %0.3fs", sec2hhmmss(chapter[:start], full:true), sec2hhmmss(chapter[:end], full:true), chapter[:length])
+		printf("(%s)", sec2hhmmss(chapter[:length]))  if chapter[:length] > 60
+		printf(" (other title)")  if chapter[:title] != title_num
+		print("\n")
+	end
+
+	track[:audio].each do |audio|
+		printf("Audio %d :", audio[:ix])
+		printf(" %s %s %dHz %s %dch", audio[:language], audio[:format], audio[:frequency], audio[:quantization], audio[:channels])
+		printf(" %s", audio[:content])  if !audio[:content].empty? && audio[:content] != "Undefined"
+		print("\n")
+	end
+
+	track[:subp].each do |subp|
+		printf("Subtitle %d :", subp[:ix])
+		printf(" %s", subp[:language])
+		printf(" %s", subp[:content])  if !subp[:content].empty? && subp[:content] != "Undefined"
+		print("\n")
+	end
 end
 
 def dvd2mp4(title_num)
-	if title_num =~ /$VTS_(\d+)$/i
-		title_num = $1.to_i
-	else
-		title_num = title_num.to_i
-	end
-
-	if title_num < 1
-		$stderr.printf("トラック番号(>0)を指定してください\n")
-		$rcode = 1
-		return
-	end
-
-	probe_data = probe_a_title(title_num)
-
-	if $probe
-		pp probe_data
-		return
-	end
-
+	title_num = title_num_to_i(title_num)
+	probe_data = probe_title_data(title_num)
 	track_data = probe_data[:lsdvd_track_data]
-	return  if !track_data
-	vts_num = probe_data[:vts]
-	return  if !vts_num
 
 	# ファイルのメタ情報を決定
 
@@ -152,7 +270,7 @@ def dvd2mp4(title_num)
 		when "subtitle"
 			streams_s_count += 1
 
-			lsdvd_data = track_data[:subp].find { |s| p streams_s_count;p s[:ix]; s[:ix] == streams_s_count }
+			lsdvd_data = track_data[:subp].find { |s| s[:ix] == streams_s_count }
 			lsdvd_data = track_data[:subp].first  if !lsdvd_data
 			if lsdvd_data && lsdvd_data[:langcode]
 				stream[:lang] = LANGTABLE[lsdvd_data[:langcode]]
@@ -170,14 +288,35 @@ def dvd2mp4(title_num)
 
 	# チャプター情報を決定
 
+	chapters = []
+	cstart = 0.0
+	for chapter_ix in 1..track_data[:chapter].size
+		chapter = track_data[:chapter].find { |c| c[:ix] == chapter_ix }
+		chapter[:start] = cstart.round(6)
+		cstart += chapter[:length]
+		chapter[:end] = cstart.round(6)
+		chapters << chapter
+		p chapter
+	end
 
-
+	cfile = Tempfile.new(["chapter", ".txt"])
+	cfile.printf(";FFMETADATA1\n")
+	chapters.each do |chapter|
+		cfile.printf("[CHAPTER]\n")
+		cfile.printf("TIMEBASE=1/1000000\n")
+		cfile.printf("START=%d\n", chapter[:start] * 1000000)
+		cfile.printf("END=%d\n", chapter[:end] * 1000000)
+		cfile.printf("title=Chapter %d\n", chapter[:ix])
+	end
+	cfile.flush
+#	system("cat", cfile.path)
 
 	# ここから変換本体
 
+	vts_num = probe_data[:vts]
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num)).sort
 	vobfiles.shift($skipvob)  if $skipvob
-
+	fail "入力VOBファイルが0個です"  if vobfiles.empty?
 	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num)).sort
 	ifofile = ifofiles.empty? ? nil : ifofiles.first
 
@@ -193,6 +332,9 @@ def dvd2mp4(title_num)
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile
 	cmd2 += ["-i", "-"]
 
+	cmd2 += ["-i", cfile.path]
+	cmd2 += ["-map_chapters", "1"]
+
 	cmd2 += ["-f", "mp4"]
 	cmd2 += ["-preset", "veryslow"]
 	cmd2 += ["-codec:s", "dvd_subtitle"]
@@ -201,8 +343,6 @@ def dvd2mp4(title_num)
 	cmd2 += ["-metadata", "album=#{$meta_album_name}"]  if $meta_album_name
 	cmd2 += ["-metadata", "track=#{$meta_track_num}"]  if $meta_track_num
 	cmd2 += ["-metadata", "title=#{$meta_title_name}"]  if $meta_title_name
-	cmd2 += ["-ss", $start_sec.to_s]  if $start_sec
-	cmd2 += ["-t", $duration_sec.to_s]  if $duration_sec
 
 	scount = 0
 
@@ -227,21 +367,41 @@ def dvd2mp4(title_num)
 		scount += 1
 	end
 
+	# ccount = 0
+	# chapters.each do |chapter|
+	# 	cmd2 += ["-metadata:c:#{ccount}", "timebase=1/1"]
+	# 	cmd2 += ["-metadata:c:#{ccount}", "start=#{chapter[:start]}"]
+	# 	cmd2 += ["-metadata:c:#{ccount}", "end=#{chapter[:end]}"]
+	# 	cmd2 += ["-metadata:c:#{ccount}", "title=Chapter #{ccount}"]
+	# 	ccount += 1
+	# end
+
+# TODO:サムネイル画像
+
+	cmd2 += ["-ss", $start_sec.to_s]  if $start_sec
+	cmd2 += ["-t", $duration_sec.to_s]  if $duration_sec
+
 	if $meta_title_name
 		if $meta_track_num
-			cmd2 += ["#{$meta_track_num} #{$meta_title_name}.mp4"]
+			dst_filename = "#{$meta_track_num} #{$meta_title_name}.mp4"
 		else
-			cmd2 += ["#{$meta_title_name}.mp4"]
+			dst_filename = "#{$meta_title_name}.mp4"
 		end
 	else
-		cmd2 += [sprintf("title_%02d.mp4", title_num)]
+		dst_filename = sprintf("title_%02d.mp4", title_num)
 	end
+	cmd2 += [dst_filename]
 
 	if $dryrun
 		p cmd1
 		p cmd2
 	else
 		Open3.pipeline(cmd1, cmd2)
+
+		timestamp_src = (ifofiles + vobfiles).first
+		atime = File.atime(timestamp_src)
+		mtime = File.mtime(timestamp_src)
+		File.utime(atime, mtime, dst_filename)
 	end
 end
 
@@ -308,11 +468,22 @@ def main(args)
 		end
 
 		opt.parse!
-		print(opt.help)  if args.empty?
 	end
 
-	args.each do |arg|
-		dvd2mp4(arg)
+	if args.empty?
+		if $probe
+			probe_disc
+		else
+			print(opt.help)
+		end
+	else
+		args.each do |arg|
+			if $probe
+				probe_title(arg)
+			else
+				dvd2mp4(arg)
+			end
+		end
 	end
 
 	return $rcode
