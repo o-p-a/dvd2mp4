@@ -17,6 +17,7 @@ LSDVD_CMD = "lsdvd"
 
 LANGTABLE = {
 	"ja" => "jpn",
+	"xx" => "",
 }
 
 require 'optparse'
@@ -27,23 +28,7 @@ require 'pp'
 
 def var_init
 	$PROGRAM_NAME = ProgName
-	$probe = false
-	$crf = 20.0
-	$start_sec = nil
-	$duration_sec = nil
-	$metadata = {
-		album_name: nil,
-		title_name: nil,
-		title_num: nil,
-		s_video_name: [],
-		s_audio_name: [],
-		s_subtitle_name: [],
-		chapter_name: [],
-	}
-	$delete_chpt_sec = 0
-	$overwrite = false
-	$skipvob = nil
-	$dryrun = false
+	$metadata = {}
 	$rcode = 0
 end
 
@@ -62,6 +47,21 @@ def sec2hhmmss(sec, full:false)
 		r = sprintf("%02d:", m) + r
 	end
 	return r
+end
+
+def pos2sec(pos, fr=29.97)
+	case pos
+	when /^(\d+)f$/
+		return $1.to_f * (1.0 / fr)
+	when /^(\d+):(\d+):(\d+(?:\.\d*)?)$/
+		return $1.to_i * 3600 + $2.to_i * 60 + $3.to_f
+	when /^(\d+):(\d+(?:\.\d*)?)$/
+		return $1.to_i * 60 + $2.to_f
+	when /^(\d+(?:\.\d*)?s?)$/
+		return $1.to_f
+	else
+		fail "位置の指定が不正です: #{pos}"
+	end
 end
 
 def title_num_to_i(title_num)
@@ -111,14 +111,20 @@ def probe_title_data(title_num)
 		if track[:vts] == vts_num
 			track[:chapter].each do |chapter|
 				cell = track[:cell].find { |c| c[:ix] == chapter[:startcell] }
-				vts_chapters << {
-					title: track[:ix],
-					ttn: track[:ttn],
-					ix: chapter[:ix],
-					length: chapter[:length],
-					first_sector: cell[:first_sector],
-					last_sector: cell[:last_sector],
+				if !vts_chapters.find { |c|
+					c[:length] == chapter[:length] &&
+					c[:first_sector] == cell[:first_sector] &&
+					c[:last_sector] == cell[:last_sector]
 				}
+					vts_chapters << {
+						title: track[:ix],
+						ttn: track[:ttn],
+						ix: chapter[:ix],
+						length: chapter[:length],
+						first_sector: cell[:first_sector],
+						last_sector: cell[:last_sector],
+					}
+				end
 			end
 		end
 	end
@@ -134,7 +140,11 @@ def probe_title_data(title_num)
 	end
 
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num)).sort
-	vobfiles.shift($skipvob)  if $skipvob
+	if $skipvob
+		vobfiles.shift($skipvob)
+	else
+		vobfiles.shift  if vobfiles.first =~ /^VTS_\d+_0\.VOB/i
+	end
 	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
 
 	cmd1 = ["cat"]
@@ -166,7 +176,7 @@ def probe_disc
 	printf("disc title : %s\n", lsdvd[:title])
 #	printf("vmg_id : %s\n", lsdvd[:vmg_id])
 	printf("provider id : %s\n", lsdvd[:provider_id])
-	printf("longest title : %d\n", lsdvd[:longest_track])  if lsdvd[:track].count > 1
+	printf("longest title : %d\n", lsdvd[:longest_track])  if lsdvd[:track].size > 1
 
 	lsdvd[:track].each do |track|
 		printf("Title %d : VTS_%02d-%d", track[:ix], track[:vts], track[:ttn])
@@ -174,9 +184,9 @@ def probe_disc
 		printf("(%s)", sec2hhmmss(track[:length]))  if track[:length] > 60
 		aux = ""
 		aux += sprintf(" angle:%d", track[:angles])  if track[:angles] != 1
-		aux += sprintf(" chpt:%d", track[:chapter].count)  if track[:chapter].count != 1
-		aux += sprintf(" audio:%d", track[:audio].count)  if track[:audio].count != 1
-		aux += sprintf(" subt:%d", track[:subp].count)  if track[:subp].count != 0
+		aux += sprintf(" chpt:%d", track[:chapter].size)  if track[:chapter].size != 1
+		aux += sprintf(" audio:%d", track[:audio].size)  if track[:audio].size != 1
+		aux += sprintf(" subt:%d", track[:subp].size)  if track[:subp].size != 0
 		print(" /" + aux)  if !aux.empty?
 		print("\n")
 	end
@@ -194,9 +204,9 @@ def probe_title(title_num)
 	printf("(%s)", sec2hhmmss(track[:length]))  if track[:length] > 60
 	aux = ""
 	aux += sprintf(" angle:%d", track[:angles])  if track[:angles] != 1
-	aux += sprintf(" chpt:%d", track[:chapter].count)  if track[:chapter].count != 1
-	aux += sprintf(" audio:%d", track[:audio].count)  if track[:audio].count != 1
-	aux += sprintf(" subt:%d", track[:subp].count)  if track[:subp].count != 0
+	aux += sprintf(" chpt:%d", track[:chapter].size)  if track[:chapter].size != 1
+	aux += sprintf(" audio:%d", track[:audio].size)  if track[:audio].size != 1
+	aux += sprintf(" subt:%d", track[:subp].size)  if track[:subp].size != 0
 	print(" /" + aux)  if !aux.empty?
 	print("\n")
 
@@ -252,6 +262,21 @@ def dvd2mp4(title_num)
 		$stdout.printf("タイトル番号が指定されていません\n")
 	end
 
+	# 開始:終了位置を決定
+	framerate = track_data[:fps]
+	$start_sec = $start_pos ? pos2sec($start_pos, framerate) : nil
+	$end_sec = $end_pos ? pos2sec($end_pos, framerate) : nil
+	$duration_sec = $duration ? pos2sec($duration, framerate) : nil
+
+	if $start_sec || $end_sec || $duration_sec
+		$start_sec = 0  if !$start_sec
+		if $end_sec
+			$duration_sec = $end_sec - $start_sec
+		elsif $duration_sec
+			$end_sec = $start_sec + $duration_sec
+		end
+	end
+
 	# ストリームのマッピングを決定
 
 	streams_v = []
@@ -274,7 +299,7 @@ def dvd2mp4(title_num)
 			title = $metadata[:s_video_name][streams_v_count - 1]
 			if !title
 				# $stdout.printf("ビデオストリーム #{streams_v_count} のタイトルが指定されていません\n")
-				# title = "#{stream[:codec_long_name]} #{stream[:width]}x#{stream[:height]} #{stream[:display_aspect_ratio]}"
+				title = "#{stream[:codec_long_name]} #{stream[:width]}x#{stream[:height]} #{stream[:display_aspect_ratio]}"
 			end
 			stream[:title] = title
 		when "audio"
@@ -322,14 +347,50 @@ def dvd2mp4(title_num)
 		end
 	end
 
+	# 出力するストリームの数を種類ごとに数える
+
+	streams_v_output = 0
+	streams_v.each do |stream|
+		if stream[:title] != "omit"
+			streams_v_output += 1
+		end
+	end
+
+	streams_a_output = 0
+	streams_a.each do |stream|
+		if stream[:title] != "omit"
+			streams_a_output += 1
+		end
+	end
+
+	streams_s_output = 0
+	streams_s.each do |stream|
+		if stream[:title] != "omit"
+			streams_s_output += 1
+		end
+	end
+
 	# チャプター情報を決定
+
+	# 指定長より短いチャプターは削除
+	probe_data[:vts_chapters].delete_if { |c| c[:length] < $delete_chpt_sec }
+
+	# 出力対象のチャプター数を数える
+	chapters_output = 0
+	probe_data[:vts_chapters].each_with_index do |chapter, i|
+		if $metadata[:chapter_name][i] != "omit"
+			chapters_output += 1
+		end
+	end
 
 	cfile = Tempfile.new(["chapter", ".txt"])
 	cfile.printf(";FFMETADATA1\n")
-
-	probe_data[:vts_chapters].delete_if { |c| c[:length] < $delete_chpt_sec }
-	if probe_data[:vts_chapters].count > 1
+	if !$split_chapter && chapters_output > 1
 		probe_data[:vts_chapters].each_with_index do |chapter, i|
+			next  if $metadata[:chapter_name][i] == "omit"
+			next  if $start_sec && chapter[:end] <= ($start_sec + 0.5)
+			next  if $end_sec && chapter[:start] >= ($end_sec - 0.5)
+
 			cfile.printf("[CHAPTER]\n")
 			cfile.printf("TIMEBASE=1/1000000\n")
 			cfile.printf("START=%d\n", chapter[:start] * 1000000)
@@ -346,14 +407,20 @@ def dvd2mp4(title_num)
 	cfile.flush
 	# system("cat", cfile.path)
 
-	# ここから変換本体
+	# 対象VOB,IFOの決定
 
 	vts_num = probe_data[:vts]
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num)).sort
-	vobfiles.shift($skipvob)  if $skipvob
+	if $skipvob
+		vobfiles.shift($skipvob)
+	else
+		vobfiles.shift  if vobfiles.first =~ /^VTS_\d+_0\.VOB/i
+	end
 	fail "入力VOBファイルが0個です"  if vobfiles.empty?
 	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num)).sort
 	ifofile = ifofiles.empty? ? nil : ifofiles.first
+
+	# 変換本体
 
 	cmd1 = ["cat"]
 	cmd1 += vobfiles
@@ -372,65 +439,142 @@ def dvd2mp4(title_num)
 
 	cmd2 += ["-f", "mp4"]
 	cmd2 += ["-preset", "veryslow"]
+	cmd2 += ["-vf", "bwdif"]  if $deinterlace
+	cmd2 += ["-codec:a", "flac", "-strict", "-2"]  if $flac_audio
+	cmd2 += ["-b:a", "256000"]  if $hq_audio
 	cmd2 += ["-codec:s", "dvd_subtitle"]
 	cmd2 += ["-movflags", "faststart"]
 	cmd2 += ["-crf", $crf.to_s]
+
 	cmd2 += ["-metadata", "album=#{$metadata[:album_name]}"]  if $metadata[:album_name]
 	cmd2 += ["-metadata", "track=#{$metadata[:title_num]}"]  if $metadata[:title_num]
 	cmd2 += ["-metadata", "title=#{$metadata[:title_name]}"]  if $metadata[:title_name]
 
+	# 出力するストリームを指定
+
 	scount = 0
 
 	streams_v.each do |stream|
-		cmd2 += ["-map", stream[:ffid]]
-		cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-		cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-		cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+		if stream[:title] != "omit"
+			cmd2 += ["-map", stream[:ffid]]
+			if streams_v_output > 1
+				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+			end
+		end
 		scount += 1
 	end
 
 	streams_a.each do |stream|
-		cmd2 += ["-map", stream[:ffid]]
-		cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-		cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-		cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+		if stream[:title] != "omit"
+			cmd2 += ["-map", stream[:ffid]]
+			# if streams_a_output > 1
+				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+			# end
+		end
 		scount += 1
 	end
 
 	streams_s.each do |stream|
-		cmd2 += ["-map", stream[:ffid]]
-		cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-		cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-		cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+		if stream[:title] != "omit"
+			cmd2 += ["-map", stream[:ffid]]
+			# if streams_s_output > 1
+				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+			# end
+		end
 		scount += 1
 	end
 
 # TODO:サムネイル画像
 
-	cmd2 += ["-ss", $start_sec.to_s]  if $start_sec
-	cmd2 += ["-t", $duration_sec.to_s]  if $duration_sec
-
+	# 出力ファイル名を生成
 	if $metadata[:title_name]
 		if $metadata[:title_num]
-			dst_filename = "#{$metadata[:title_num]} #{$metadata[:title_name]}.mp4"
+			dst_basename = "#{$metadata[:title_num]} #{$metadata[:title_name]}"
 		else
-			dst_filename = "#{$metadata[:title_name]}.mp4"
+			dst_basename = "#{$metadata[:title_name]}"
 		end
 	else
-		dst_filename = sprintf("title_%02d.mp4", title_num)
+		dst_basename = sprintf("title_%02d", title_num)
 	end
-	cmd2 += [dst_filename]
 
-	if $dryrun
-		p cmd1
-		p cmd2
+	if $split_chapter
+		if chapters_output < 1
+			fail "出力対象のチャプターがひとつもありません"
+		end
+
+		probe_data[:vts_chapters].each_with_index do |chapter, i|
+			if $metadata[:chapter_name][i] != "omit"
+				cmd2c = cmd2.dup
+
+				s = chapter[:start]
+				s += $start_sec  if $start_sec
+				cmd2c += ["-ss", "#{s}"]
+				s = chapter[:length]
+				s = [s, $duration_sec].min if $duration_sec
+				cmd2c += ["-t", "#{s}"]
+
+				title = $metadata[:chapter_name][i]
+				if title
+					if $metadata[:title_name]
+						cmd2c += ["-metadata", "title=#{$metadata[:title_name]} #{$metadata[:chapter_name][i]}"]
+					else
+						cmd2c += ["-metadata", "title=#{$metadata[:chapter_name][i]}"]
+					end
+				end
+				title = "#{i+1}" if !title
+				dst_filename = dst_basename + " " + title + ".mp4"
+
+				if $dryrun
+					p cmd1
+					p cmd2c + [dst_filename]
+				else
+					cmd2c += [dst_filename]
+					Open3.pipeline(cmd1, cmd2c)
+
+					if File.exist?(dst_filename)
+						timestamp_src = (ifofiles + vobfiles).first
+						atime = File.atime(timestamp_src)
+						mtime = File.mtime(timestamp_src)
+						File.utime(atime, mtime, dst_filename)
+					end
+				end
+			end
+		end
 	else
-		Open3.pipeline(cmd1, cmd2)
+		cmd2 += ["-ss", $start_sec.to_s]  if $start_sec
+		cmd2 += ["-t", $duration_sec.to_s]  if $duration_sec
+		dst_filename = dst_basename + ".mp4"
 
-		timestamp_src = (ifofiles + vobfiles).first
-		atime = File.atime(timestamp_src)
-		mtime = File.mtime(timestamp_src)
-		File.utime(atime, mtime, dst_filename)
+		if $dryrun
+			p cmd1
+			p cmd2 + [dst_filename]
+		else
+			# if !$encode_2pass
+				cmd2 += [dst_filename]
+				Open3.pipeline(cmd1, cmd2)
+			# else
+			# 	cmd2_1 = cmd2.dup
+			# 	cmd2_1 += ["-an", "-pass", "1", "NUL"]
+			# 	cmd2_2 = cmd2.dup
+			# 	cmd2_2 += ["-pass", "2", dst_filename]
+			#
+			# 	Open3.pipeline(cmd1, cmd2_1)
+			# 	Open3.pipeline(cmd1, cmd2_2)
+			# end
+
+			if File.exist?(dst_filename)
+				timestamp_src = (ifofiles + vobfiles).first
+				atime = File.atime(timestamp_src)
+				mtime = File.mtime(timestamp_src)
+				File.utime(atime, mtime, dst_filename)
+			end
+		end
 	end
 end
 
@@ -441,76 +585,130 @@ def main(args)
 		opt.banner = "#{ProgName} v#{Version} #{Copyright}\n" +
 						"Usage: #{ProgName} [options] VTS_nn..."
 
+		$probe = false
 		opt.on("-p", "--[no-]probe",
 			"ファイルの情報を表示する") do |v|
 			$probe = v
 		end
 
+		$crf = 20.0
 		opt.on("--crf=n", Float,
 			"VBR画質を指定する(0:高 〜 20.0:デフォルト)") do |v|
 			$crf = v
 		end
 
-		opt.on("--startpoint=s", Float,
-			"開始位置を指定する(秒)") do |v|
-			$start_sec = v
+		$start_pos = nil
+		$start_sec = nil
+		opt.on("-s", "--startpoint=pos", String,
+			"開始位置を指定する(秒/時分秒/フレーム)") do |v|
+			$start_pos = v
 		end
 
-		opt.on("-d", "--duration=s", Float,
-			"出力する秒数を指定する") do |v|
-			$duration_sec = v
+		$end_pos = nil
+		$end_sec = nil
+		opt.on("-e", "--endpoint=pos", String,
+			"終了位置を指定する") do |v|
+			$end_pos = v
 		end
 
-		opt.on("--album-name[=s]", String,
+		$duration = nil
+		$duration_sec = nil
+		opt.on("-d", "--duration=dur", String,
+			"出力する長さを指定する") do |v|
+			$duration = v
+		end
+
+		$split_chapter = false
+		opt.on("--[no-]split-chapter",
+			"チャプターごとに分割して出力する") do |v|
+			$split_chapter = v
+		end
+
+		$metadata[:album_name] = nil
+		opt.on("--album-name[=str]", String,
 			"アルバム名を指定") do |v|
 			$metadata[:album_name] = v
 		end
 
+		$metadata[:title_num] = nil
 		opt.on("--title-num[=n]", String,
 			"タイトル番号を指定") do |v|
 			$metadata[:title_num] = v
 		end
 
-		opt.on("--title[=s]", String,
+		$metadata[:title_name] = nil
+		opt.on("--title[=str]", String,
 			"タイトルを指定") do |v|
 			$metadata[:title_name] = v
 		end
 
-		opt.on("--title:v[=s]", String,
-			"ビデオストリームのタイトルを指定") do |v|
+		$metadata[:s_video_name] = []
+		opt.on("--title:v[=str]", String,
+			"ビデオストリームのタイトルを指定('omit'で出力しない)") do |v|
 			$metadata[:s_video_name] << v
 		end
 
-		opt.on("--title:a[=s]", String,
+		$metadata[:s_audio_name] = []
+		opt.on("--title:a[=str]", String,
 			"オーディオストリームのタイトルを指定") do |v|
 			$metadata[:s_audio_name] << v
 		end
 
-		opt.on("--title:s[=s]", String,
+		$metadata[:s_subtitle_name] = []
+		opt.on("--title:s[=str]", String,
 			"字幕ストリームのタイトルを指定") do |v|
 			$metadata[:s_subtitle_name] << v
 		end
 
-		opt.on("--title:c[=s]", String,
+		$metadata[:chapter_name] = []
+		opt.on("--title:c[=str]", String,
 			"チャプタータイトルを指定") do |v|
 			$metadata[:chapter_name] << v
 		end
 
-		opt.on("--delete-short-chapter=s", Float,
-			"s秒より短いチャプターを削除する") do |v|
+		$delete_chpt_sec = 0
+		opt.on("--delete-short-chapter=n", Float,
+			"n秒より短いチャプターマークを削除する") do |v|
 			$delete_chpt_sec = v
 		end
 
+		$deinterlace = false
+		opt.on("--deinterlace[=flag]", TrueClass,
+			"インターレース解除を行う") do
+			$deinterlace = true
+		end
+
+		$hq_audio = false
+		opt.on("-y", "--[no-]hqaudio",
+			"高音質でエンコードする") do |v|
+			$hq_audio = v
+		end
+
+		$flac_audio = false
+		opt.on("-y", "--[no-]flacaudio",
+			"音声をFLACでエンコードする") do |v|
+			$flac_audio = v
+		end
+
+		$overwrite = false
 		opt.on("-y", "--[no-]overwrite",
 			"出力ファイルが既に存在しても上書きする") do |v|
 			$overwrite = v
 		end
 
-		opt.on("--skipvobs=n", Integer,
-			"先頭のn個のVOBファイルをスキップする") do |v|
-			$skipvob = v
-		end
+		$encode_2pass = false
+		# opt.on("--[no-]2pass",
+		# 	"2パスエンコードを行う") do |v|
+		# 	$encode_2pass = v
+		# end
 
+		$skipvob = nil
+		# opt.on("--skipvobs=n", Integer,
+		# 	"先頭のn個のVOBファイルをスキップする") do |v|
+		# 	$skipvob = v
+		# end
+
+		$dryrun = false
 		opt.on("--[no-]dry-run",
 			"変換処理を実際には行わない") do |v|
 			$dryrun = v
