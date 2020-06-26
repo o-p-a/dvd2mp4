@@ -664,18 +664,8 @@ def dvd2mp4(vts_num)
 			p cmd1
 			p cmd2 + [dst_filename]
 		else
-			# if !$encode_2pass
-				cmd2 += [dst_filename]
-				Open3.pipeline(cmd1, cmd2)
-			# else
-			# 	cmd2_1 = cmd2.dup
-			# 	cmd2_1 += ["-an", "-pass", "1", "NUL"]
-			# 	cmd2_2 = cmd2.dup
-			# 	cmd2_2 += ["-pass", "2", dst_filename]
-			#
-			# 	Open3.pipeline(cmd1, cmd2_1)
-			# 	Open3.pipeline(cmd1, cmd2_2)
-			# end
+			cmd2 += [dst_filename]
+			Open3.pipeline(cmd1, cmd2)
 
 			if File.exist?(dst_filename)
 				timestamp_src = (ifofiles + vobfiles).first
@@ -811,12 +801,6 @@ def main(args)
 			"出力ファイルが既に存在しても上書きする") do |v|
 			$overwrite = v
 		end
-
-		$encode_2pass = false
-		# opt.on("--[no-]2pass",
-		# 	"2パスエンコードを行う") do |v|
-		# 	$encode_2pass = v
-		# end
 
 		$skipvob = nil
 		# opt.on("--skipvobs=n", Integer,
