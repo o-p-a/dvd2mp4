@@ -130,11 +130,7 @@ end
 
 def probe_vts_data_raw(vts_num)
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
-	if $skipvob
-		vobfiles.shift($skipvob)
-	else
-		vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
-	end
+	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
 	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
 
 	cmd1 = ["cat"]
@@ -205,11 +201,7 @@ def probe_vts_data(vts_num)
 	end
 
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
-	if $skipvob
-		vobfiles.shift($skipvob)
-	else
-		vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
-	end
+	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
 	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
 
 	vobtimes = []
@@ -529,11 +521,7 @@ def dvd2mp4(vts_num)
 
 	# 対象VOB,IFOの決定
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
-	if $skipvob
-		vobfiles.shift($skipvob)
-	else
-		vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
-	end
+	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
 	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
 
 	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num), File::FNM_CASEFOLD).sort
@@ -801,12 +789,6 @@ def main(args)
 			"出力ファイルが既に存在しても上書きする") do |v|
 			$overwrite = v
 		end
-
-		$skipvob = nil
-		# opt.on("--skipvobs=n", Integer,
-		# 	"先頭のn個のVOBファイルをスキップする") do |v|
-		# 	$skipvob = v
-		# end
 
 		$dryrun = false
 		opt.on("--[no-]dry-run",
