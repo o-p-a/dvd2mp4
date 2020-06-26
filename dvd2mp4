@@ -17,7 +17,7 @@ LSDVD_CMD = "lsdvd"
 
 LANGTABLE = {
 	"ja" => "jpn",
-	"xx" => "",
+	"xx" => nil,
 }
 
 require 'optparse'
@@ -68,7 +68,6 @@ def vts_num_to_i(vts_num)
 	if vts_num =~ /^VTS_(\d+)$/i
 		i = $1.to_i
 	else
-#		i = vts_num.to_i
 		fail "'VTS_n'の形式で指定してください"
 	end
 	if i < 1
@@ -83,7 +82,7 @@ def probe_disc_data_raw
 	cmd += ["-Or", "."]
 	r = Open3.capture3(*cmd)
 
-	if r[0] == ""
+	if r[0].empty?
 		printf("%s\n", r[1])
 		fail "lsdvdの実行に失敗しました"
 	end
@@ -185,16 +184,25 @@ def probe_vts_data(vts_num)
 	end
 	chapters.sort_by! { |c| c[:first_sector] }
 	ctmap = {0 => 0.0}
-	ccount = 0
-	chapters.each do |chapter|
-		ccount += 1
-		chapter[:ix] = ccount
+	chapters.each.with_index(1) do |chapter, ix|
+		chapter[:ix] = ix
+		if !ctmap[chapter[:first_sector]]
+			fail "チャプター情報が不連続のため、開始時刻を確定できません"
+		end
 		chapter[:start] = ctmap[chapter[:first_sector]].round(6)
 		ctmap[chapter[:last_sector] + 1] = chapter[:start] + chapter[:length]
 		chapter[:end] = ctmap[chapter[:last_sector] + 1].round(6)
 	end
 
-# TODO : 29.97 / 30fps の調整
+	adjust_fps = true
+	if adjust_fps
+		adjust_fps_factor = Rational(30000,1000) / Rational(30000,1001)
+		chapters.each do |chapter|
+			chapter[:start] *= adjust_fps_factor
+			chapter[:end] *= adjust_fps_factor
+			chapter[:length] *= adjust_fps_factor
+		end
+	end
 
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
 	if $skipvob
@@ -215,11 +223,13 @@ def probe_vts_data(vts_num)
 		r = Open3.capture3(*cmd)
 		ffprobe = JSON.parse(r[0], symbolize_names:true)
 		vobtimes << {
+			filename: vobfile,
 			start: ffprobe[:format][:start_time].to_f,
 			duration: ffprobe[:format][:duration].to_f,
 			end: ffprobe[:format][:start_time].to_f + ffprobe[:format][:duration].to_f,
 		}
 	end
+	vob_duration = vobtimes.sum { |v| v[:duration] }
 
 	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num), File::FNM_CASEFOLD).sort
 
@@ -252,42 +262,42 @@ def probe_vts_data(vts_num)
 		when "audio"
 			streams_a << stream
 			streamid = stream[:id].to_i(0)
-			laudio = nil
+			lsdvd = nil
 			titles.each do |title|
 				title[:audio].each do |audio|
 					if audio[:streamid].to_i(0) == streamid
-						laudio = audio
+						lsdvd = audio
 						break
 					end
 				end
-				break  if laudio
+				break  if lsdvd
 			end
-			if laudio
-				stream[:langcode] = laudio[:langcode]
-				stream[:language] = laudio[:language]
-				stream[:content] = laudio[:content]
-				stream[:lang] = LANGTABLE[laudio[:langcode]]
-				fail sprintf("言語情報コードが変換できません: %s", laudio[:langcode])  if !stream[:lang]
+			if lsdvd
+				stream[:langcode] = lsdvd[:langcode]
+				stream[:language] = lsdvd[:language]
+				stream[:content] = lsdvd[:content]
+				stream[:lang] = LANGTABLE[stream[:langcode]]
+				fail sprintf("言語コードが変換できません: %s", stream[:langcode])  if !LANGTABLE.include?(stream[:langcode])
 			end
 		when "subtitle"
 			streams_s << stream
 			streamid = stream[:id].to_i(0)
-			lsubp = nil
+			lsdvd = nil
 			titles.each do |title|
 				title[:subp].each do |subp|
 					if subp[:streamid].to_i(0) == streamid
-						lsubp = subp
+						lsdvd = subp
 						break
 					end
 				end
-				break  if lsubp
+				break  if lsdvd
 			end
-			if lsubp
-				stream[:langcode] = lsubp[:langcode]
-				stream[:language] = lsubp[:language]
-				stream[:content] = lsubp[:content]
-				stream[:lang] = LANGTABLE[lsubp[:langcode]]
-				fail sprintf("言語情報コードが変換できません: %s", lsubp[:langcode])  if !stream[:lang]
+			if lsdvd
+				stream[:langcode] = lsdvd[:langcode]
+				stream[:language] = lsdvd[:language]
+				stream[:content] = lsdvd[:content]
+				stream[:lang] = LANGTABLE[stream[:langcode]]
+				fail sprintf("言語コードが変換できません: %s", stream[:langcode])  if !LANGTABLE.include?(stream[:langcode])
 			end
 		when "data"
 			# NOP
@@ -318,7 +328,6 @@ def probe_disc
 	printf("disc title : %s\n", pd[:title])  if pd[:title] != "unknown"
 	printf("vmg_id : %s\n", pd[:vmg_id])  if pd[:vmg_id] != "DVDVIDEO-VMG"
 	printf("provider id : %s\n", pd[:provider_id])  if pd[:provider_id] != ""
-	# printf("longest title : %d\n", pd[:longest_track])  if pd[:track].size > 1
 
 	pd[:vts].each do |vts|
 		printf("VTS_%02d :", vts[:vts])
@@ -397,7 +406,6 @@ end
 
 def dvd2mp4(vts_num)
 	pd = probe_vts_data(vts_num)
-#	track_data = probe_data[:lsdvd_track_data]
 
 	# ファイルのメタ情報を決定
 	if !$metadata[:album_name]
@@ -420,7 +428,7 @@ def dvd2mp4(vts_num)
 	# 出力ファイル名を生成
 	if $metadata[:title_name]
 		if $metadata[:title_num]
-			dst_basename = "#{$metadata[:title_num]} #{$metadata[:title_name]}"
+			dst_basename = "#{$metadata[:title_num]} #{$metadata[:title_name]}".strip
 		else
 			dst_basename = "#{$metadata[:title_name]}"
 		end
@@ -446,10 +454,10 @@ def dvd2mp4(vts_num)
 	# ストリームのマッピングを決定
 	pd[:streams_v].each_with_index do |stream, ix|
 		title = $metadata[:s_video_name][ix]
-		if !title
-			# $stdout.printf("ビデオストリーム #{ix+1} のタイトルが指定されていません\n")
-			title = "#{stream[:codec_long_name]} #{stream[:width]}x#{stream[:height]} #{stream[:display_aspect_ratio]}"
-		end
+		# if !title
+		# 	$stdout.printf("ビデオストリーム #{ix+1} のタイトルが指定されていません\n")
+		# 	title = "#{stream[:codec_long_name]} #{stream[:width]}x#{stream[:height]} #{stream[:display_aspect_ratio]}".strip
+		# end
 		stream[:title] = title
 	end
 
@@ -457,7 +465,11 @@ def dvd2mp4(vts_num)
 		title = $metadata[:s_audio_name][ix]
 		if !title
 			$stdout.printf("オーディオストリーム #{ix+1} のタイトルが指定されていません\n")
-			title = "#{stream[:language]} #{stream[:channel_layout]}"
+			if stream[:lang]
+				title = "#{stream[:language]} #{stream[:channel_layout]}".strip
+			else
+				title = "#{stream[:channel_layout]}".strip
+			end
 		end
 		stream[:title] = title
 	end
@@ -507,11 +519,13 @@ def dvd2mp4(vts_num)
 			cfile.printf("END=%d\n", chapter[:end] * 1000000)
 
 			title = chapter[:title]
-			cfile.printf("title=%s\n", title)  if title && !title.empty?
+			if title && !title.empty?
+				cfile.printf("title=%s\n", title)
+			end
 		end
 	end
 	cfile.flush
-	# system("cat", cfile.path)
+	system("cat", cfile.path)  if $dryrun
 
 	# 対象VOB,IFOの決定
 	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
@@ -617,7 +631,7 @@ def dvd2mp4(vts_num)
 			title = chapter[:title]
 			if title
 				if $metadata[:title_name]
-					cmd2c += ["-metadata", "title=#{$metadata[:title_name]} #{title}"]
+					cmd2c += ["-metadata", "title=#{$metadata[:title_name]} #{title}".rstrip]
 				else
 					cmd2c += ["-metadata", "title=#{title}"]
 				end
