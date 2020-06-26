@@ -443,8 +443,12 @@ def dvd2mp4(vts_num)
 		end
 	end
 
-	# ストリームのマッピングを決定
+	# ストリームのタイトル等を決定
+	deinterlace = false
 	pd[:streams_v].each_with_index do |stream, ix|
+		if stream[:field_order] && stream[:field_order] != "progressive"
+			deinterlace = true
+		end
 		title = $metadata[:s_video_name][ix]
 		# if !title
 		# 	$stdout.printf("ビデオストリーム #{ix+1} のタイトルが指定されていません\n")
@@ -546,10 +550,10 @@ def dvd2mp4(vts_num)
 
 	cmd2 += ["-f", "mp4"]
 	cmd2 += ["-preset", "veryslow"]
-	cmd2 += ["-vf", "bwdif"]  if $deinterlace
+	cmd2 += ["-vf", "bwdif"]  if deinterlace
 	cmd2 += ["-codec:a", "flac", "-strict", "-2"]  if $flac_audio
 	cmd2 += ["-b:a", "256000"]  if $hq_audio
-	cmd2 += ["-codec:s", "dvd_subtitle"]
+	cmd2 += ["-codec:s", "dvd_subtitle"]  if streams_s_output >= 1
 	cmd2 += ["-movflags", "faststart"]
 	cmd2 += ["-crf", $crf.to_s]
 
@@ -764,13 +768,6 @@ def main(args)
 		opt.on("--delete-short-chapter=n", Float,
 			"n秒より短いチャプターマークを削除する") do |v|
 			$delete_chpt_sec = v
-		end
-
-		$deinterlace = false
-		# TODO : 自動判定に
-		opt.on("--deinterlace[=flag]", TrueClass,
-			"インターレース解除を行う") do
-			$deinterlace = true
 		end
 
 		$hq_audio = false
