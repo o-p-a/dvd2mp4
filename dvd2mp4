@@ -613,6 +613,7 @@ def dvd2mp4(vts_num)
 			s += $start_sec  if $start_sec
 			cmd2c += ["-ss", "#{s}"]
 			s = chapter[:length]
+			s -= $start_sec  if $start_sec
 			s = [s, $duration_sec].min if $duration_sec
 			cmd2c += ["-t", "#{s}"]
 
