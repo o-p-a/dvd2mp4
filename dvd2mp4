@@ -7,7 +7,7 @@
 # 2020/06/14 opa
 #----------------------------------------------------------------
 ProgName = "dvd2mp4"
-Version = "0.01"
+Version = "1.00"
 #=====dpk===== Copyright2020
 Copyright = "Copyright (c) 2020 by opa"
 #=====dpk=====
@@ -17,6 +17,8 @@ LSDVD_CMD = "lsdvd"
 
 LANGTABLE = {
 	"ja" => "jpn",
+	"en" => "eng",
+	"fr" => "fra",
 	"xx" => nil,
 }
 
@@ -49,7 +51,7 @@ def sec2hhmmss(sec, full:false)
 	return r
 end
 
-def pos2sec(pos, fr=29.97)
+def pos2sec(pos, fr=nil) # Rational(30000,1001)
 	case pos
 	when /^(\d+)f$/
 		return $1.to_f / fr
@@ -76,7 +78,29 @@ def vts_num_to_i(vts_num)
 	return i
 end
 
+def guess_lang(s)
+	case s
+	when /(英語|English)/i
+		return "eng"
+	when /(日本語|Japanese)/i
+		return "jpn"
+	end
+
+	return nil
+end
+
+def get_vobfiles(vts_num)
+	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
+	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
+	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
+	return vobfiles
+end
+
 def probe_disc_data_raw
+	if !File.exist?("VIDEO_TS.IFO")
+		fail "DVDのインデックスファイルが存在しません"
+	end
+
 	cmd = [LSDVD_CMD]
 	cmd += ["-x"]
 	cmd += ["-Or", "."]
@@ -93,27 +117,27 @@ end
 def probe_disc_data
 	pd = probe_disc_data_raw
 
-	pd[:track].each.with_index(1) do |track, ix|
-		fail "lsdvdのトラック情報に飛び番があります"  if track[:ix] != ix
+	pd[:track].each.with_index(1) do |title, ix|
+		fail "lsdvdのタイトル情報に飛び番があります"  if title[:ix] != ix
 		# TODO : アングル情報のチェック
-		track[:audio].each.with_index(1) do |audio, ix|
+		title[:audio].each.with_index(1) do |audio, ix|
 			fail "lsdvdのオーディオ情報に飛び番があります"  if audio[:ix] != ix
 		end
-		track[:chapter].each.with_index(1) do |chapter, ix|
+		title[:chapter].each.with_index(1) do |chapter, ix|
 			fail "lsdvdのチャプター情報に飛び番があります"  if chapter[:ix] != ix
 		end
-		track[:cell].each.with_index(1) do |cell, ix|
+		title[:cell].each.with_index(1) do |cell, ix|
 			fail "lsdvdのセル情報に飛び番があります"  if cell[:ix] != ix
 		end
-		track[:subp].each.with_index(1) do |subp, ix|
+		title[:subp].each.with_index(1) do |subp, ix|
 			fail "lsdvdの字幕情報に飛び番があります"  if subp[:ix] != ix
 		end
 	end
 
 	vts_wk = {}
-	pd[:track].each do |track|
-		vts_wk[track[:vts]] ||= []
-		vts_wk[track[:vts]] << track
+	pd[:track].each do |title|
+		vts_wk[title[:vts]] ||= []
+		vts_wk[title[:vts]] << title
 	end
 	vts = []
 	vts_wk.each do |v, t|
@@ -125,20 +149,31 @@ def probe_disc_data
 	end
 	pd[:vts] = vts
 
+	if $adjust_fps
+		adjust_fps_factor = Rational(30000,1000) / Rational(30000,1001)
+		pd[:track].each do |title|
+			title[:length] *= adjust_fps_factor
+			title[:chapter].each do |chapter|
+				chapter[:length] *= adjust_fps_factor
+			end
+			title[:cell].each do |cell|
+				cell[:length] *= adjust_fps_factor
+			end
+		end
+	end
+
 	return pd
 end
 
 def probe_vts_data_raw(vts_num)
-	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
-	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
-	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
+	vobfiles = get_vobfiles(vts_num)
 
 	cmd1 = ["cat"]
 	cmd1 += vobfiles
 
 	cmd2 = [FFPROBE_CMD]
 	cmd2 += ["-hide_banner"]
-	cmd2 += ["-loglevel", "error"]
+	cmd2 += ["-loglevel", "warning"]
 	cmd2 += ["-analyzeduration", "120M"]
 	cmd2 += ["-probesize", "120M"]
 	cmd2 += ["-print_format", "json"]
@@ -190,39 +225,7 @@ def probe_vts_data(vts_num)
 		chapter[:end] = ctmap[chapter[:last_sector] + 1].round(6)
 	end
 
-	adjust_fps = true
-	if adjust_fps
-		adjust_fps_factor = Rational(30000,1000) / Rational(30000,1001)
-		chapters.each do |chapter|
-			chapter[:start] *= adjust_fps_factor
-			chapter[:end] *= adjust_fps_factor
-			chapter[:length] *= adjust_fps_factor
-		end
-	end
-
-	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
-	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
-	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
-
-	vobtimes = []
-	vobfiles.each do |vobfile|
-		cmd = [FFPROBE_CMD]
-		cmd += ["-hide_banner"]
-		cmd += ["-loglevel", "error"]
-		cmd += ["-print_format", "json"]
-		cmd += ["-show_format"]
-		cmd += ["-i", vobfile]
-		r = Open3.capture3(*cmd)
-		ffprobe = JSON.parse(r[0], symbolize_names:true)
-		vobtimes << {
-			filename: vobfile,
-			start: ffprobe[:format][:start_time].to_f,
-			duration: ffprobe[:format][:duration].to_f,
-			end: ffprobe[:format][:start_time].to_f + ffprobe[:format][:duration].to_f,
-		}
-	end
-	vob_duration = vobtimes.sum { |v| v[:duration] }
-
+	vobfiles = get_vobfiles(vts_num)
 	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num), File::FNM_CASEFOLD).sort
 
 	cmd1 = ["cat"]
@@ -304,7 +307,6 @@ def probe_vts_data(vts_num)
 		titles: titles,
 		chapters: chapters,
 		vobfiles: vobfiles,
-		vobtimes: vobtimes,
 		ifofiles: ifofiles,
 		format: ffprobe[:format],
 		streams: streams,
@@ -312,6 +314,62 @@ def probe_vts_data(vts_num)
 		streams_a: streams_a,
 		streams_s: streams_s,
 	}
+end
+
+def measure_vob_duration(vts_num)
+	vobfiles = get_vobfiles(vts_num)
+	wfile = Tempfile.new(["vtsmeasure", ".wav"])
+
+	vobtimes = []
+	vobfiles.each do |vobfile|
+		cmd = [FFPROBE_CMD]
+		cmd += ["-hide_banner"]
+		cmd += ["-loglevel", "warning"]
+		cmd += ["-print_format", "json"]
+		cmd += ["-show_format"]
+		cmd += ["-i", vobfile]
+		r = Open3.capture3(*cmd)
+		ffprobe = JSON.parse(r[0], symbolize_names:true)
+		vobtimes << {
+			filename: vobfile,
+			start: ffprobe[:format][:start_time].to_f,
+			duration: ffprobe[:format][:duration].to_f,
+			end: ffprobe[:format][:start_time].to_f + ffprobe[:format][:duration].to_f,
+		}
+	end
+
+	return vobtimes.sum { |v| v[:duration] }
+end
+
+def measure_strict_duration(vts_num)
+	printf("Measuring strict VTS duration...\n")
+
+	vobfiles = get_vobfiles(vts_num)
+	wfile = Tempfile.new(["vtsmeasure", ".wav"])
+
+	cmd1 = ["cat"]
+	cmd1 += vobfiles
+
+	cmd2 = [FFMPEG_CMD]
+	cmd2 += ["-hide_banner"]
+	cmd2 += ["-loglevel", "error"]
+	cmd2 += ["-y"]
+	cmd2 += ["-i", "-"]
+	cmd2 += ["-f", "wav"]
+	cmd2 += ["-ac", "1"] # モノラル
+	cmd2 += ["-codec:a", "pcm_u8"]
+	cmd2 += [wfile.path]
+	Open3.pipeline(cmd1, cmd2)
+
+	cmd3 = [FFPROBE_CMD]
+	cmd3 += ["-hide_banner"]
+	cmd3 += ["-loglevel", "warning"]
+	cmd3 += ["-print_format", "json"]
+	cmd3 += ["-show_format"]
+	cmd3 += ["-i", wfile.path]
+	ffprobe = JSON.parse(Open3.capture3(*cmd3)[0], symbolize_names:true)
+
+	return ffprobe[:format][:duration].to_f
 end
 
 def probe_disc
@@ -345,6 +403,12 @@ end
 def probe_vts(vts_num)
 	pd = probe_vts_data(vts_num)
 
+	if $strict_length
+		video_duration = measure_strict_duration(vts_num)
+	else
+		video_duration = measure_vob_duration(vts_num)
+	end
+
 	printf("VTS_%02d :", vts_num)
 
 	if pd[:streams_v].size != 1
@@ -355,9 +419,8 @@ def probe_vts(vts_num)
 	printf(" %dx%d(%s)", video[:width], video[:height], video[:display_aspect_ratio])
 	printf(" %0.2ffps", Rational(video[:avg_frame_rate]).to_f)
 	printf(" %s", video[:field_order])
-	video_duration = pd[:format][:duration]
-	video_duration = pd[:vobtimes].sum { |v| v[:duration]}  if !video_duration
 	printf(" %s(%0.3fs)", sec2hhmmss(video_duration, full:true), video_duration)
+
 	aux = ""
 	#aux += sprintf(" angle:%d", pd[:angles])  if track[:angles] != 1
 	aux += sprintf(" audio:%d", pd[:streams_a].size)  if pd[:streams_a].size != 1
@@ -466,6 +529,10 @@ def dvd2mp4(vts_num)
 			else
 				title = "#{stream[:channel_layout]}".strip
 			end
+		else
+			if !stream[:lang]
+				stream[:lang] = guess_lang(title)
+			end
 		end
 		stream[:title] = title
 	end
@@ -475,6 +542,10 @@ def dvd2mp4(vts_num)
 		if !title
 			$stdout.printf("字幕ストリーム #{ix+1} のタイトルが指定されていません\n")
 			title = "#{stream[:language]}"
+		else
+			if !stream[:lang]
+				stream[:lang] = guess_lang(title)
+			end
 		end
 		stream[:title] = title
 	end
@@ -524,12 +595,9 @@ def dvd2mp4(vts_num)
 	system("cat", cfile.path)  if $dryrun
 
 	# 対象VOB,IFOの決定
-	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
-	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
-	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
-
-	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num), File::FNM_CASEFOLD).sort
-	ifofile = ifofiles.empty? ? nil : ifofiles.first
+	vobfiles = pd[:vobfiles]
+	ifofiles = pd[:ifofiles]
+	ifofile = ifofiles.first
 
 	# 変換本体
 
@@ -548,6 +616,7 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-i", cfile.path]
 	cmd2 += ["-map_chapters", "1"]
 
+	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
 	cmd2 += ["-preset", "veryslow"]
 	cmd2 += ["-vf", "bwdif"]  if deinterlace
@@ -556,6 +625,9 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-codec:s", "dvd_subtitle"]  if streams_s_output >= 1
 	cmd2 += ["-movflags", "faststart"]
 	cmd2 += ["-crf", $crf.to_s]
+
+# aac_coder twoloop
+# profile aac_main
 
 	cmd2 += ["-metadata", "album=#{$metadata[:album_name]}"]  if $metadata[:album_name]
 	cmd2 += ["-metadata", "track=#{$metadata[:title_num]}"]  if $metadata[:title_num]
@@ -723,43 +795,43 @@ def main(args)
 		end
 
 		$metadata[:album_name] = nil
-		opt.on("--album-name[=str]", String,
+		opt.on("--album-name=str", String,
 			"アルバム名を指定") do |v|
 			$metadata[:album_name] = v
 		end
 
 		$metadata[:title_num] = nil
-		opt.on("--title-num[=n]", String,
+		opt.on("--title-num=n", String,
 			"タイトル番号を指定") do |v|
 			$metadata[:title_num] = v
 		end
 
 		$metadata[:title_name] = nil
-		opt.on("--title[=str]", String,
+		opt.on("--title=str", String,
 			"タイトルを指定") do |v|
 			$metadata[:title_name] = v
 		end
 
 		$metadata[:s_video_name] = []
-		opt.on("--title:v[=str]", String,
+		opt.on("--title:v=str", String,
 			"ビデオストリームのタイトルを指定('omit'で出力しない)") do |v|
 			$metadata[:s_video_name] << v
 		end
 
 		$metadata[:s_audio_name] = []
-		opt.on("--title:a[=str]", String,
+		opt.on("--title:a=str", String,
 			"オーディオストリームのタイトルを指定") do |v|
 			$metadata[:s_audio_name] << v
 		end
 
 		$metadata[:s_subtitle_name] = []
-		opt.on("--title:s[=str]", String,
+		opt.on("--title:s=str", String,
 			"字幕ストリームのタイトルを指定") do |v|
 			$metadata[:s_subtitle_name] << v
 		end
 
 		$metadata[:chapter_name] = []
-		opt.on("--title:c[=str]", String,
+		opt.on("--title:c=str", String,
 			"チャプタータイトルを指定") do |v|
 			$metadata[:chapter_name] << v
 		end
@@ -780,6 +852,18 @@ def main(args)
 		opt.on("-y", "--[no-]flacaudio",
 			"音声をFLACでエンコードする") do |v|
 			$flac_audio = v
+		end
+
+		$adjust_fps = true
+		opt.on("--[no-]adjust-fps",
+			"チャプター時間のfps調整を行う") do |v|
+			$adjust_fps = v
+		end
+
+		$strict_length = false
+		opt.on("--[no-]strict-length",
+			"再生時間を厳密に測定する") do |v|
+			$strict_length = v
 		end
 
 		$overwrite = false
