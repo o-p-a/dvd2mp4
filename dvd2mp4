@@ -22,6 +22,9 @@ LANGTABLE = {
 	"xx" => nil,
 }
 
+FF_ANALYZEDURATION = "600M"
+FF_PROBESIZE = "150M"
+
 require 'optparse'
 require 'open3'
 require 'json'
@@ -174,8 +177,8 @@ def probe_vts_data_raw(vts_num)
 	cmd2 = [FFPROBE_CMD]
 	cmd2 += ["-hide_banner"]
 	cmd2 += ["-loglevel", "warning"]
-	cmd2 += ["-analyzeduration", "120M"]
-	cmd2 += ["-probesize", "120M"]
+	cmd2 += ["-analyzeduration", FF_ANALYZEDURATION]
+	cmd2 += ["-probesize", FF_PROBESIZE]
 	cmd2 += ["-print_format", "json"]
 	cmd2 += ["-show_format"]
 	cmd2 += ["-show_streams"]
@@ -234,8 +237,8 @@ def probe_vts_data(vts_num)
 	cmd2 = [FFPROBE_CMD]
 	cmd2 += ["-hide_banner"]
 	cmd2 += ["-loglevel", "error"]
-	cmd2 += ["-analyzeduration", "120M"]
-	cmd2 += ["-probesize", "120M"]
+	cmd2 += ["-analyzeduration", FF_ANALYZEDURATION]
+	cmd2 += ["-probesize", FF_PROBESIZE]
 	cmd2 += ["-print_format", "json"]
 	cmd2 += ["-show_format"]
 	cmd2 += ["-show_streams"]
@@ -429,9 +432,9 @@ def probe_vts(vts_num)
 	print(" /" + aux)  if !aux.empty?
 	print("\n")
 
-	pd[:disc][:track].each do |track|
-		next  if track[:vts] != vts_num
-		if track[:angles] != 1
+	pd[:disc][:track].each do |title|
+		next  if title[:vts] != vts_num
+		if title[:angles] != 1
 			printf("Angle %d :", 1)
 			print(" 複数アングルがあります\n")
 		end
@@ -456,6 +459,23 @@ def probe_vts(vts_num)
 		printf(" %s - %s %s(%0.3fs)", sec2hhmmss(chapter[:start], full:true), sec2hhmmss(chapter[:end], full:true),
 		 							sec2hhmmss(chapter[:length]), chapter[:length])
 		print("\n")
+	end
+
+	pd[:disc][:track].each do |title|
+		next  if title[:vts] != vts_num
+
+		if title[:angles] > pd[:streams_v].size
+			printf("タイトル%dのアングルは%d個ですが、ビデオストリームは%d個しかありません\n",
+				title[:ix], title[:angles], pd[:streams_v].size)
+		end
+		if title[:audio].size > pd[:streams_a].size
+			printf("タイトル%dのオーディオチャネルは%d個ですが、オーディオストリームは%d個しかありません\n",
+				title[:ix], title[:audio].size, pd[:streams_a].size)
+		end
+		if title[:subp].size > pd[:streams_s].size
+			printf("タイトル%dの字幕数は%d個ですが、字幕ストリームは%d個しかありません\n",
+				title[:ix], title[:subp].size, pd[:streams_s].size)
+		end
 	end
 end
 
@@ -607,8 +627,8 @@ def dvd2mp4(vts_num)
 	cmd2 = [FFMPEG_CMD]
 	cmd2 += ["-hide_banner"]
 	cmd2 += ["-loglevel", "info"]
-	cmd2 += ["-analyzeduration", "120M"]
-	cmd2 += ["-probesize", "120M"]
+	cmd2 += ["-analyzeduration", FF_ANALYZEDURATION]
+	cmd2 += ["-probesize", FF_PROBESIZE]
 	cmd2 += ["-y"]  if $overwrite
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile
 	cmd2 += ["-i", "-"]
@@ -639,14 +659,11 @@ def dvd2mp4(vts_num)
 		cmd2 += ["-codec:s", "dvd_subtitle"]
 	end
 
-# aac_coder twoloop
-# profile aac_main
-
 	cmd2 += ["-metadata", "album=#{$metadata[:album_name]}"]  if $metadata[:album_name]
 	cmd2 += ["-metadata", "track=#{$metadata[:title_num]}"]  if $metadata[:title_num]
 	cmd2 += ["-metadata", "title=#{$metadata[:title_name]}"]  if $metadata[:title_name]
 
-	# 出力するストリームを指定
+	# 出力するストリームとストリーム毎のオプションを指定
 
 	scount = 0
 
@@ -838,25 +855,29 @@ def main(args)
 
 		$metadata[:s_video_name] = []
 		opt.on("--title:v=str", String,
-			"ビデオストリームのタイトルを指定('omit'で出力しない)") do |v|
+			"ビデオストリームのタイトルを指定('omit'で出力しない/'auto'で自動)") do |v|
+			v = nil  if v == "auto"
 			$metadata[:s_video_name] << v
 		end
 
 		$metadata[:s_audio_name] = []
 		opt.on("--title:a=str", String,
 			"オーディオストリームのタイトルを指定") do |v|
+			v = nil  if v == "auto"
 			$metadata[:s_audio_name] << v
 		end
 
 		$metadata[:s_subtitle_name] = []
 		opt.on("--title:s=str", String,
 			"字幕ストリームのタイトルを指定") do |v|
+			v = nil  if v == "auto"
 			$metadata[:s_subtitle_name] << v
 		end
 
 		$metadata[:chapter_name] = []
 		opt.on("--title:c=str", String,
 			"チャプタータイトルを指定") do |v|
+			v = nil  if v == "auto"
 			$metadata[:chapter_name] << v
 		end
 
