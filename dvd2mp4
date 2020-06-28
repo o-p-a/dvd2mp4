@@ -7,7 +7,7 @@
 # 2020/06/14 opa
 #----------------------------------------------------------------
 ProgName = "dvd2mp4"
-Version = "1.00"
+Version = "1.01"
 #=====dpk===== Copyright2020
 Copyright = "Copyright (c) 2020 by opa"
 #=====dpk=====
@@ -612,19 +612,32 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-y"]  if $overwrite
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile
 	cmd2 += ["-i", "-"]
-
 	cmd2 += ["-i", cfile.path]
 	cmd2 += ["-map_chapters", "1"]
 
 	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
-	cmd2 += ["-preset", "veryslow"]
-	cmd2 += ["-vf", "bwdif"]  if deinterlace
-	cmd2 += ["-codec:a", "flac", "-strict", "-2"]  if $flac_audio
-	cmd2 += ["-b:a", "256000"]  if $hq_audio
-	cmd2 += ["-codec:s", "dvd_subtitle"]  if streams_s_output >= 1
 	cmd2 += ["-movflags", "faststart"]
-	cmd2 += ["-crf", $crf.to_s]
+
+	if streams_v_output >= 1
+		cmd2 += ["-preset:v", "veryslow"]
+		cmd2 += ["-crf:v", $crf.to_s]
+		cmd2 += ["-tune:v", $video_tune]  if $video_tune
+		cmd2 += ["-vf:v", "bwdif"]  if deinterlace
+	end
+
+	if streams_a_output >= 1
+		if $flac_audio
+			cmd2 += ["-codec:a", "flac", "-strict", "experimental"]
+		else
+			cmd2 += ["-codec:a", "libfdk_aac"]
+			cmd2 += ["-profile:a", "aac_low"]
+		end
+	end
+
+	if streams_s_output >= 1
+		cmd2 += ["-codec:s", "dvd_subtitle"]
+	end
 
 # aac_coder twoloop
 # profile aac_main
@@ -638,38 +651,49 @@ def dvd2mp4(vts_num)
 	scount = 0
 
 	pd[:streams_v].each do |stream|
-		if stream[:title] != "omit"
-			cmd2 += ["-map", stream[:ffid]]
-			if streams_v_output >= 2
-				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
-			end
+		next  if stream[:title] == "omit"
+
+		cmd2 += ["-map", stream[:ffid]]
+
+		if streams_v_output >= 2
+			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+			cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+			cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
 		end
+
 		scount += 1
 	end
 
 	pd[:streams_a].each do |stream|
-		if stream[:title] != "omit"
-			cmd2 += ["-map", stream[:ffid]]
-			# if streams_a_output >= 2
-				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
-			# end
+		next  if stream[:title] == "omit"
+
+		cmd2 += ["-map", stream[:ffid]]
+		if $hq_audio
+			cmd2 += ["-vbr:#{scount}", "5"]
+		else
+			cmd2 += ["-vbr:#{scount}", "3"]
+			cmd2 += ["-cutoff:#{scount}", "18000"]
 		end
+
+		# if streams_a_output >= 2
+			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+			cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+			cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+		# end
+
 		scount += 1
 	end
 
 	pd[:streams_s].each do |stream|
-		if stream[:title] != "omit"
-			cmd2 += ["-map", stream[:ffid]]
-			# if streams_s_output >= 2
-				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
-			# end
-		end
+		next  if stream[:title] == "omit"
+
+		cmd2 += ["-map", stream[:ffid]]
+		# if streams_s_output >= 2
+			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+			cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+			cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+		# end
+
 		scount += 1
 	end
 
@@ -763,7 +787,7 @@ def main(args)
 
 		$crf = 20.0
 		opt.on("--crf=n", Float,
-			"VBR画質を指定する(0:高 〜 20.0:デフォルト)") do |v|
+			"VBR画質を指定する(0:ロスレス - 20.0:デフォルト - 51:低)") do |v|
 			$crf = v
 		end
 
@@ -840,6 +864,12 @@ def main(args)
 		opt.on("--delete-short-chapter=n", Float,
 			"n秒より短いチャプターマークを削除する") do |v|
 			$delete_chpt_sec = v
+		end
+
+		$video_tune = nil
+		opt.on("--tune:v=str", String,
+			"ビデオの種類(film|animation|grain|stillimage...)") do |v|
+			$video_tune = v
 		end
 
 		$hq_audio = false
