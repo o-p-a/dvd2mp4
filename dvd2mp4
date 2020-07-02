@@ -22,19 +22,21 @@ LANGTABLE = {
 	"xx" => nil,
 }
 
-FF_ANALYZEDURATION = "600M"
-FF_PROBESIZE = "150M"
+FF_ANALYZEDURATION = "600M" # 10min
+FF_PROBESIZE = "450M" # 450MB
 
 require 'optparse'
 require 'open3'
 require 'json'
 require 'tempfile'
+require 'shellwords'
 require 'pp'
 
 def var_init
 	$PROGRAM_NAME = ProgName
 	$metadata = {}
 	$rcode = 0
+	$commandline = ProgName + " " + myShellwordsJoin(args)
 end
 
 def sec2hhmmss(sec, full:false)
@@ -75,9 +77,6 @@ def vts_num_to_i(vts_num)
 	else
 		fail "'VTS_n'の形式で指定してください"
 	end
-	if i < 1
-		fail "タイトル番号の指定が不正です: #{vts_num}"
-	end
 	return i
 end
 
@@ -93,10 +92,17 @@ def guess_lang(s)
 end
 
 def get_vobfiles(vts_num)
-	vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
-	vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
-	fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
-	return vobfiles
+	if vts_num >= 1
+		vobfiles = Dir.glob(sprintf("VTS_%02d_*.VOB", vts_num), File::FNM_CASEFOLD).sort
+		vobfiles.shift  if vobfiles.size >= 2 && vobfiles.first =~ /^VTS_\d+_0\.VOB/i
+		fail "入力VOBファイルがひとつもありません"  if vobfiles.empty?
+		ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num), File::FNM_CASEFOLD).sort
+	elsif vts_num == 0
+		vobfiles = Dir.glob("VIDEO_TS.VOB", File::FNM_CASEFOLD).sort
+		fail "VIDEO_TS.VOBがありません"  if vobfiles.empty?
+		ifofiles = Dir.glob("VIDEO_TS.IFO", File::FNM_CASEFOLD).sort
+	end
+	return [vobfiles, ifofiles]
 end
 
 def probe_disc_data_raw
@@ -169,7 +175,7 @@ def probe_disc_data
 end
 
 def probe_vts_data_raw(vts_num)
-	vobfiles = get_vobfiles(vts_num)
+	vobfiles, ifofiles = get_vobfiles(vts_num)
 
 	cmd1 = ["cat"]
 	cmd1 += vobfiles
@@ -188,9 +194,13 @@ end
 
 def probe_vts_data(vts_num)
 	disc = probe_disc_data
-	titles = disc[:vts][vts_num - 1][:titles]
-	if !titles
-		fail sprintf("VTS_%02dの情報はありません", vts_num)
+	if vts_num >= 1
+		if !disc[:vts][vts_num - 1]
+			fail sprintf("VTS_%02dの情報はありません", vts_num)
+		end
+		titles = disc[:vts][vts_num - 1][:titles]
+	else
+		titles = []
 	end
 
 	chapters = []
@@ -228,8 +238,7 @@ def probe_vts_data(vts_num)
 		chapter[:end] = ctmap[chapter[:last_sector] + 1].round(6)
 	end
 
-	vobfiles = get_vobfiles(vts_num)
-	ifofiles = Dir.glob(sprintf("VTS_%02d_*.IFO", vts_num), File::FNM_CASEFOLD).sort
+	vobfiles, ifofiles = get_vobfiles(vts_num)
 
 	cmd1 = ["cat"]
 	cmd1 += vobfiles
@@ -320,7 +329,7 @@ def probe_vts_data(vts_num)
 end
 
 def measure_vob_duration(vts_num)
-	vobfiles = get_vobfiles(vts_num)
+	vobfiles, ifofiles = get_vobfiles(vts_num)
 	wfile = Tempfile.new(["vtsmeasure", ".wav"])
 
 	vobtimes = []
@@ -347,7 +356,7 @@ end
 def measure_strict_duration(vts_num)
 	printf("Measuring strict VTS duration...\n")
 
-	vobfiles = get_vobfiles(vts_num)
+	vobfiles, ifofiles = get_vobfiles(vts_num)
 	wfile = Tempfile.new(["vtsmeasure", ".wav"])
 
 	cmd1 = ["cat"]
@@ -662,6 +671,7 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-metadata", "album=#{$metadata[:album_name]}"]  if $metadata[:album_name]
 	cmd2 += ["-metadata", "track=#{$metadata[:title_num]}"]  if $metadata[:title_num]
 	cmd2 += ["-metadata", "title=#{$metadata[:title_name]}"]  if $metadata[:title_name]
+	cmd2 += ["-metadata", "encoding_tool=#{$commandline}"]
 
 	# 出力するストリームとストリーム毎のオプションを指定
 
@@ -781,6 +791,20 @@ def dvd2mp4(vts_num)
 			end
 		end
 	end
+end
+
+def myShellwordsJoin(args)
+	def q(s)
+		if s =~ /[\s;&()|^<>?*\[\]$`"\\!{}]/
+			return "'" + s.gsub("'") { "'\\''" } + "'"
+		else
+			return s.gsub("'") { "\\'" }
+		end
+	end
+
+	return args.map { |a|
+		(a =~ /^(--.+=)(.*)$/) ? q($1) + q($2) : q(a)
+	}.join(" ")
 end
 
 def main(args)
