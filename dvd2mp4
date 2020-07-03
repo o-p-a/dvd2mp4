@@ -648,10 +648,10 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-movflags", "faststart"]
 
 	if streams_v_output >= 1
-		cmd2 += ["-preset:v", $preset]
-		cmd2 += ["-crf:v", $crf.to_s]
+		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
+		cmd2 += ["-crf:v", $testmode ? ([$crf+10, 51].min.to_s) : $crf.to_s]
 		cmd2 += ["-tune:v", $video_tune]  if $video_tune
-		cmd2 += ["-vf:v", "bwdif"]  if deinterlace
+		cmd2 += ["-vf:v", $testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field"]  if deinterlace
 	end
 
 	if streams_a_output >= 1
@@ -917,10 +917,10 @@ def main(args)
 			$video_tune = v
 		end
 
-		$preset = "veryslow"
-		opt.on("-u", "--ultrafast",
-			"ビデオプリセット ultrafast") do
-			$preset = "ultrafast"
+		$testmode = false
+		opt.on("--[no-]testmode",
+			"テストモード(高速,低画質)") do |v|
+			$testmode = v
 		end
 
 
