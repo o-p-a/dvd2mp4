@@ -38,6 +38,20 @@ def var_init
 	$rcode = 0
 end
 
+def myShellwordsJoin_q(s)
+	if s =~ /[\s;&()|^<>?*\[\]$`"\\!{}]/
+		return "'" + s.gsub("'") { "'\\''" } + "'"
+	else
+		return s.gsub("'") { "\\'" }
+	end
+end
+
+def myShellwordsJoin(args)
+	return args.map { |a|
+		(a =~ /^(--.+=)(.*)$/) ? myShellwordsJoin_q($1) + myShellwordsJoin_q($2) : myShellwordsJoin_q(a)
+	}.join(" ")
+end
+
 def sec2hhmmss(sec, full:false)
 	r = ""
 	d, m = sec.divmod(1) # 秒以下
@@ -518,19 +532,22 @@ def dvd2mp4(vts_num)
 	else
 		dst_basename = sprintf("VTS_%02d", vts_num)
 	end
+	if $testmode
+		dst_basename = "(test)" + dst_basename
+	end
 
 	# 開始:終了位置を決定
 	framerate = Rational(pd[:streams_v].first[:avg_frame_rate])
-	$start_sec = $start_pos ? pos2sec($start_pos, framerate) : nil
-	$end_sec = $end_pos ? pos2sec($end_pos, framerate) : nil
-	$duration_sec = $duration ? pos2sec($duration, framerate) : nil
+	start_sec = $start_pos ? pos2sec($start_pos, framerate) : nil
+	end_sec = $end_pos ? pos2sec($end_pos, framerate) : nil
+	duration_sec = $duration ? pos2sec($duration, framerate) : nil
 
-	if $start_sec || $end_sec || $duration_sec
-		$start_sec = 0  if !$start_sec
-		if $end_sec
-			$duration_sec = $end_sec - $start_sec
-		elsif $duration_sec
-			$end_sec = $start_sec + $duration_sec
+	if start_sec || end_sec || duration_sec
+		start_sec = 0  if !start_sec
+		if end_sec
+			duration_sec = end_sec - start_sec
+		elsif duration_sec
+			end_sec = start_sec + duration_sec
 		end
 	end
 
@@ -605,8 +622,8 @@ def dvd2mp4(vts_num)
 	if !$split_chapter && chapters_output >= 2
 		pd[:chapters].each.with_index(1) do |chapter, ix|
 			next  if chapter[:title] == "omit"
-			next  if $start_sec && chapter[:end] <= ($start_sec + 0.5)
-			next  if $end_sec && chapter[:start] >= ($end_sec - 0.5)
+			next  if start_sec && chapter[:end] <= (start_sec + 0.5)
+			next  if end_sec && chapter[:start] >= (end_sec - 0.5)
 
 			cfile.printf("[CHAPTER]\n")
 			cfile.printf("TIMEBASE=1/1000000\n")
@@ -649,7 +666,11 @@ def dvd2mp4(vts_num)
 
 	if streams_v_output >= 1
 		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
-		cmd2 += ["-crf:v", $testmode ? ([$crf+10, 51].min.to_s) : $crf.to_s]
+		cmd2 += ["-crf:v", $crf.to_s]
+		if $quality_a == "l"
+			cmd2 += ["-maxrate:v", "1.0M"]
+			cmd2 += ["-bufsize:v", "2.5M"]
+		end
 		cmd2 += ["-tune:v", $video_tune]  if $video_tune
 		cmd2 += ["-vf:v", $testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field"]  if deinterlace
 	end
@@ -660,6 +681,17 @@ def dvd2mp4(vts_num)
 		else
 			cmd2 += ["-codec:a", "libfdk_aac"]
 			cmd2 += ["-profile:a", "aac_low"]
+
+			case $quality_a
+			when "h"
+				cmd2 += ["-vbr:a", "5"]
+			when "l"
+				cmd2 += ["-vbr:a", "1"]
+				cmd2 += ["-cutoff:a", "14000"]
+			else
+				cmd2 += ["-vbr:a", "3"]
+				cmd2 += ["-cutoff:a", "18000"]
+			end
 		end
 	end
 
@@ -694,12 +726,6 @@ def dvd2mp4(vts_num)
 		next  if stream[:title] == "omit"
 
 		cmd2 += ["-map", stream[:ffid]]
-		if $hq_audio
-			cmd2 += ["-vbr:#{scount}", "5"]
-		else
-			cmd2 += ["-vbr:#{scount}", "3"]
-			cmd2 += ["-cutoff:#{scount}", "18000"]
-		end
 
 		# if streams_a_output >= 2
 			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
@@ -714,6 +740,7 @@ def dvd2mp4(vts_num)
 		next  if stream[:title] == "omit"
 
 		cmd2 += ["-map", stream[:ffid]]
+
 		# if streams_s_output >= 2
 			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
 			cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
@@ -736,11 +763,11 @@ def dvd2mp4(vts_num)
 			cmd2c = cmd2.dup
 
 			s = chapter[:start]
-			s += $start_sec  if $start_sec
+			s += start_sec  if start_sec
 			cmd2c += ["-ss", "#{s}"]
 			s = chapter[:length]
-			s -= $start_sec  if $start_sec
-			s = [s, $duration_sec].min if $duration_sec
+			s -= start_sec  if start_sec
+			s = [s, duration_sec].min if duration_sec
 			cmd2c += ["-t", "#{s}"]
 
 			title = chapter[:title]
@@ -771,8 +798,8 @@ def dvd2mp4(vts_num)
 			end
 		end
 	else
-		cmd2 += ["-ss", $start_sec.to_s]  if $start_sec
-		cmd2 += ["-t", $duration_sec.to_s]  if $duration_sec
+		cmd2 += ["-ss", start_sec.to_s]  if start_sec
+		cmd2 += ["-t", duration_sec.to_s]  if duration_sec
 		dst_filename = dst_basename + ".mp4"
 
 		if $dryrun
@@ -790,20 +817,6 @@ def dvd2mp4(vts_num)
 			end
 		end
 	end
-end
-
-def myShellwordsJoin(args)
-	def q(s)
-		if s =~ /[\s;&()|^<>?*\[\]$`"\\!{}]/
-			return "'" + s.gsub("'") { "'\\''" } + "'"
-		else
-			return s.gsub("'") { "\\'" }
-		end
-	end
-
-	return args.map { |a|
-		(a =~ /^(--.+=)(.*)$/) ? q($1) + q($2) : q(a)
-	}.join(" ")
 end
 
 def main(args)
@@ -826,31 +839,24 @@ def main(args)
 			$probe_raw = v
 		end
 
-		$crf = 20.0
-		opt.on("--crf=n", Float,
-			"VBR画質を指定する(0:ロスレス - 20.0:デフォルト - 51:低)") do |v|
-			$crf = v
-		end
-
 		$start_pos = nil
-		$start_sec = nil
 		opt.on("-s", "--startpoint=pos", String,
 			"開始位置を指定する(秒/時分秒/フレーム)") do |v|
 			$start_pos = v
 		end
 
 		$end_pos = nil
-		$end_sec = nil
 		opt.on("-e", "--endpoint=pos", String,
 			"終了位置を指定する") do |v|
 			$end_pos = v
+			$duration = nil
 		end
 
 		$duration = nil
-		$duration_sec = nil
 		opt.on("-d", "--duration=dur", String,
 			"出力する長さを指定する") do |v|
 			$duration = v
+			$end_pos = nil
 		end
 
 		$split_chapter = false
@@ -917,17 +923,43 @@ def main(args)
 			$video_tune = v
 		end
 
-		$testmode = false
-		opt.on("--[no-]testmode",
-			"テストモード(高速,低画質)") do |v|
-			$testmode = v
+		$quality_v = nil
+		$quality_a = nil
+		opt.on("--hq",
+			"高画質,高音質でエンコードする") do
+			$quality_v = "h"
+			$crf = 19.0
+			$quality_a = "h"
+		end
+		opt.on("--hq:v",
+			"高画質でエンコードする") do
+			$quality_v = "h"
+			$crf = 19.0
+		end
+		opt.on("--hq:a",
+			"高音質でエンコードする") do
+			$quality_a = "h"
+		end
+		opt.on("--lq",
+			"低画質,低音質でエンコードする") do
+			$quality_v = "l"
+			$crf = 24.0
+			$quality_a = "l"
+		end
+		opt.on("--lq:v",
+			"低画質でエンコードする") do
+			$quality_v = "l"
+			$crf = 24.0
+		end
+		opt.on("--lq:a",
+			"低音質でエンコードする") do
+			$quality_a = "l"
 		end
 
-
-		$hq_audio = false
-		opt.on("-y", "--[no-]hqaudio",
-			"高音質でエンコードする") do |v|
-			$hq_audio = v
+		$crf = 21.0
+		opt.on("--crf=n", Float,
+			"VBR画質を指定する(0:ロスレス - 21.0:デフォルト - 51:低)") do |v|
+			$crf = v
 		end
 
 		$flac_audio = false
@@ -954,6 +986,12 @@ def main(args)
 			$overwrite = v
 		end
 
+		$testmode = false
+		opt.on("--[no-]testmode",
+			"テストモード(高速,低画質)") do |v|
+			$testmode = v
+		end
+
 		$dryrun = false
 		opt.on("--[no-]dry-run",
 			"変換処理を実際には行わない") do |v|
@@ -961,6 +999,17 @@ def main(args)
 		end
 
 		opt.parse!
+
+		if $flac_audio
+			$quality_a = nil
+		end
+
+		if $testmode
+			$crf = 32.0
+			$flac_audio = false
+			$quality_v = "l"
+			$quality_a = "l"
+		end
 
 		if args.empty?
 			if $probe_raw
