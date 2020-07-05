@@ -662,7 +662,7 @@ def dvd2mp4(vts_num)
 
 	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
-	cmd2 += ["-movflags", "faststart"]
+	cmd2 += ["-movflags", "faststart+disable_chpl"]
 
 	if streams_v_output >= 1
 		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
