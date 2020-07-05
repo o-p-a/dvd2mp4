@@ -216,39 +216,66 @@ def probe_vts_data(vts_num)
 		titles = []
 	end
 
-	chapters = []
+	cells = []
+	ctmap = {0 => 0.0}
 	titles.each do |title|
-		title[:chapter].each do |chapter|
-			cell = title[:cell][chapter[:startcell]-1]
-			if !chapters.find { |c|
-				c[:length] == chapter[:length] &&
+		title[:cell].each do |cell|
+			if !cells.find { |c|
 				c[:first_sector] == cell[:first_sector] &&
 				c[:last_sector] == cell[:last_sector]
 			}
-				chapters << {
+				cells << {
 					ix: nil,
-					title: title[:ix],
-					title_ix: chapter[:ix],
-					vts_ttn: title[:ttn],
 					start: nil,
 					end: nil,
-					length: chapter[:length],
+					length: cell[:length],
 					first_sector: cell[:first_sector],
 					last_sector: cell[:last_sector],
 				}
 			end
 		end
 	end
-	chapters.sort_by! { |c| c[:first_sector] }
-	ctmap = {0 => 0.0}
-	chapters.each.with_index(1) do |chapter, ix|
-		chapter[:ix] = ix
-		if !ctmap[chapter[:first_sector]]
-			fail "チャプター情報が不連続のため、開始時刻を確定できません"
+	cells.sort_by! { |c| c[:first_sector] }
+	cells.each.with_index(1) do |cell, ix|
+		startsec = ctmap[cell[:first_sector]]
+		fail "セル情報が不連続のため、開始時刻を確定できません"  if !startsec
+		endsec = startsec + cell[:length]
+
+		cell[:ix] = ix
+		cell[:start] = startsec
+		ctmap[cell[:last_sector] + 1] = endsec
+		cell[:end] = endsec
+	end
+
+	chapters = []
+	titles.each do |title|
+		title[:chapter].each do |chapter|
+			cell = title[:cell][chapter[:startcell]-1]
+			if !chapters.find { |c|
+				c[:length] == chapter[:length] &&
+				c[:first_sector] == cell[:first_sector]
+			}
+				chapters << {
+					ix: nil,
+					title: title[:ix],
+					title_ix: chapter[:ix],
+					start: nil,
+					end: nil,
+					length: chapter[:length],
+					first_sector: cell[:first_sector],
+				}
+			end
 		end
-		chapter[:start] = ctmap[chapter[:first_sector]].round(6)
-		ctmap[chapter[:last_sector] + 1] = chapter[:start] + chapter[:length]
-		chapter[:end] = ctmap[chapter[:last_sector] + 1].round(6)
+	end
+	chapters.sort_by! { |c| c[:first_sector] }
+	chapters.each.with_index(1) do |chapter, ix|
+		startsec = ctmap[chapter[:first_sector]]
+		fail "チャプター開始時刻を確定できません"  if !startsec
+		endsec = startsec + chapter[:length]
+
+		chapter[:ix] = ix
+		chapter[:start] = startsec
+		chapter[:end] = endsec
 	end
 
 	vobfiles, ifofiles = get_vobfiles(vts_num)
@@ -343,7 +370,6 @@ end
 
 def measure_vob_duration(vts_num)
 	vobfiles, ifofiles = get_vobfiles(vts_num)
-	wfile = Tempfile.new(["vtsmeasure", ".wav"])
 
 	vobtimes = []
 	vobfiles.each do |vobfile|
