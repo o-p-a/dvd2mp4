@@ -689,6 +689,8 @@ def dvd2mp4(vts_num)
 	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
 	cmd2 += ["-movflags", "+faststart+disable_chpl"]
+	cmd2 += ["<<startpoiont>>"]
+	cmd2 += ["<<duration>>"]
 
 	if streams_v_output >= 1
 		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
@@ -702,6 +704,16 @@ def dvd2mp4(vts_num)
 		filters_v = []
 
 		filters_v << ($testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field")  if deinterlace
+
+		if $crop_video
+			crop_w = pd[:streams_v].first[:width] - $crop_video[2] - $crop_video[3]
+			crop_h = pd[:streams_v].first[:height] - $crop_video[0] - $crop_video[1]
+			crop_x = $crop_video[2]
+			crop_y = $crop_video[0]
+			filters_v << "crop=w=#{crop_w}:h=#{crop_h}:x=#{crop_x}:y=#{crop_y}"
+			filters_v << "scale=#{pd[:streams_v].first[:width]}:#{pd[:streams_v].first[:height]}"
+		end
+
 		case $rotate_video
 		when 90
 			filters_v << "transpose=clock"
@@ -803,11 +815,11 @@ def dvd2mp4(vts_num)
 
 			s = chapter[:start]
 			s += start_sec  if start_sec
-			cmd2c += ["-ss", "#{s}"]
+			cmd2c[cmd2c.index("<<startpoiont>>"), 1] = ["-ss", "#{s}"]
 			s = chapter[:length]
 			s -= start_sec  if start_sec
-			s = [s, duration_sec].min if duration_sec
-			cmd2c += ["-t", "#{s}"]
+			s = [s, duration_sec].min  if duration_sec
+			cmd2c[cmd2c.index("<<duration>>"), 1] = ["-t", "#{s}"]
 
 			title = chapter[:title]
 			if title
@@ -837,8 +849,8 @@ def dvd2mp4(vts_num)
 			end
 		end
 	else
-		cmd2 += ["-ss", start_sec.to_s]  if start_sec
-		cmd2 += ["-t", duration_sec.to_s]  if duration_sec
+		cmd2[cmd2.index("<<startpoiont>>"), 1] = start_sec ? ["-ss", start_sec.round(3).to_s] : []
+		cmd2[cmd2.index("<<duration>>"), 1] = duration_sec ? ["-t", duration_sec.round(3).to_s] : []
 		dst_filename = dst_basename + ".mp4"
 
 		if $dryrun
@@ -999,6 +1011,12 @@ def main(args)
 		opt.on("--crf=n", Float,
 			"VBR画質を指定する(0:ロスレス - 21.0:デフォルト - 51:低)") do |v|
 			$crf = v
+		end
+
+		$crop_video = nil
+		opt.on("--crop-video=t,b,l,r", Array,
+			"映像を切り取り(上,下,左,右)",) do |v|
+			$crop_video = v.map { |v| v.to_i }
 		end
 
 		$rotate_video = nil
