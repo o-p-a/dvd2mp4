@@ -688,7 +688,7 @@ def dvd2mp4(vts_num)
 
 	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
-	cmd2 += ["-movflags", "faststart+disable_chpl"]
+	cmd2 += ["-movflags", "+faststart+disable_chpl"]
 
 	if streams_v_output >= 1
 		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
@@ -698,7 +698,20 @@ def dvd2mp4(vts_num)
 			cmd2 += ["-bufsize:v", "2.5M"]
 		end
 		cmd2 += ["-tune:v", $video_tune]  if $video_tune
-		cmd2 += ["-vf:v", $testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field"]  if deinterlace
+
+		filters_v = []
+
+		filters_v << ($testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field")  if deinterlace
+		case $rotate_video
+		when 90
+			filters_v << "transpose=clock"
+		when 180
+			filters_v << "hflip" << "vflip"
+		when 270
+			filters_v << "transpose=cclock"
+		end
+
+		cmd2 += ["-filter:v", filters_v.join(",")]  if filters_v.size > 0
 	end
 
 	if streams_a_output >= 1
@@ -986,6 +999,12 @@ def main(args)
 		opt.on("--crf=n", Float,
 			"VBR画質を指定する(0:ロスレス - 21.0:デフォルト - 51:低)") do |v|
 			$crf = v
+		end
+
+		$rotate_video = nil
+		opt.on("--rotate-video=n", String, ["90", "180", "270"],
+			"映像を回転(90|180|270)",) do |v|
+			$rotate_video = v.to_i
 		end
 
 		$flac_audio = false
