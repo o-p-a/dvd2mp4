@@ -680,7 +680,7 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-loglevel", "info"]
 	cmd2 += ["-analyzeduration", FF_ANALYZEDURATION]
 	cmd2 += ["-probesize", FF_PROBESIZE]
-	cmd2 += ["-y"]  if $overwrite
+	cmd2 += ["-y"]  if $overwrite || $testmode
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile
 	cmd2 += ["-i", "-"]
 	cmd2 += ["-i", cfile.path]
