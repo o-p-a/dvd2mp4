@@ -870,6 +870,18 @@ def dvd2mp4(vts_num)
 	end
 end
 
+def show_encoding_tool(filename)
+	cmd = [FFPROBE_CMD]
+	cmd += ["-hide_banner"]
+	cmd += ["-loglevel", "warning"]
+	cmd += ["-print_format", "json"]
+	cmd += ["-show_format"]
+	cmd += ["-i", filename]
+	format = JSON.parse(Open3.capture3(*cmd)[0], symbolize_names:true)
+
+	printf("%s\n", format[:format][:tags][:encoder])
+end
+
 def main(args)
 	var_init
 	$commandline = ProgName + " " + myShellwordsJoin(args)
@@ -1061,6 +1073,12 @@ def main(args)
 			$dryrun = v
 		end
 
+		$show_encoder = false
+		opt.on("--[no-]show-encoder",
+			"エンコーダ情報を表示") do |v|
+			$show_encoder = v
+		end
+
 		opt.parse!
 
 		if $flac_audio
@@ -1084,13 +1102,17 @@ def main(args)
 			end
 		else
 			args.each do |arg|
-				vts_num = vts_num_to_i(arg)
-				if $probe_raw
-					pp probe_vts_data_raw(vts_num)
-				elsif $probe
-					probe_vts(vts_num)
+				if $show_encoder
+					show_encoding_tool(arg)
 				else
-					dvd2mp4(vts_num)
+					vts_num = vts_num_to_i(arg)
+					if $probe_raw
+						pp probe_vts_data_raw(vts_num)
+					elsif $probe
+						probe_vts(vts_num)
+					else
+						dvd2mp4(vts_num)
+					end
 				end
 			end
 		end
