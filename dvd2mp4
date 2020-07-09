@@ -700,6 +700,11 @@ def dvd2mp4(vts_num)
 			cmd2 += ["-bufsize:v", "2.5M"]
 		end
 		cmd2 += ["-tune:v", $video_tune]  if $video_tune
+		aspect_video = $aspect_video || pd[:streams_v].first[:display_aspect_ratio]
+		if $rotate_video == 90 || $rotate_video == 270
+			aspect_video = "#{$2}:#{$1}"  if aspect_video =~ /(\d+):(\d)+/
+		end
+		cmd2 += ["-aspect:v", aspect_video]
 
 		filters_v = []
 
@@ -1029,6 +1034,12 @@ def main(args)
 		opt.on("--crop-video=t,b,l,r", Array,
 			"映像を切り取り(上,下,左,右)",) do |v|
 			$crop_video = v.map { |v| v.to_i }
+		end
+
+		$aspect_video = nil
+		opt.on("--aspect-video=r", String,
+			"映像のアスペクト比(w:h)",) do |v|
+			$aspect_video = v
 		end
 
 		$rotate_video = nil
