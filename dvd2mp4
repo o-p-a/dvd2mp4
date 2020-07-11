@@ -656,10 +656,8 @@ def dvd2mp4(vts_num)
 			cfile.printf("START=%d\n", chapter[:start] * 1000000)
 			cfile.printf("END=%d\n", chapter[:end] * 1000000)
 
-			title = chapter[:title]
-			if title && !title.empty?
-				cfile.printf("title=%s\n", title)
-			end
+			title = chapter[:title] || "Chapter #{ix}"
+			cfile.printf("title=%s\n", title)
 		end
 	end
 	cfile.flush
