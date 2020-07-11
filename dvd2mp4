@@ -694,6 +694,7 @@ def dvd2mp4(vts_num)
 
 	if streams_v_output >= 1
 		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
+		cmd2 += ["-pix_fmt", "yuv420p"]
 		cmd2 += ["-crf:v", $crf.to_s]
 		if $quality_a == "l"
 			cmd2 += ["-maxrate:v", "1.0M"]
@@ -726,6 +727,12 @@ def dvd2mp4(vts_num)
 			filters_v << "hflip" << "vflip"
 		when 270
 			filters_v << "transpose=cclock"
+		end
+
+		if $whitepoint || $blackpoint
+			w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
+			b = $blackpoint ? [$blackpoint[0] || 0, $blackpoint[1] || 0, $blackpoint[2] || 0] : [0,0,0]
+			filters_v << "colorlevels=rimin=#{b[0]}:gimin=#{b[1]}:bimin=#{b[2]}:rimax=#{w[0]}:gimax=#{w[1]}:bimax=#{w[2]}"
 		end
 
 		cmd2 += ["-filter:v", filters_v.join(",")]  if filters_v.size > 0
@@ -1046,6 +1053,18 @@ def main(args)
 		opt.on("--rotate-video=n", String, ["90", "180", "270"],
 			"映像を回転(90|180|270)",) do |v|
 			$rotate_video = v.to_i
+		end
+
+		$whitepoint = nil
+		opt.on("--white-point=r,g,b", Array,
+			"映像のホワイトポイント(0～255)",) do |v|
+			$whitepoint = v.map { |v| v.to_i / 255.0 }
+		end
+
+		$blackpoint = nil
+		opt.on("--black-point=r,g,b", Array,
+			"映像のブラックポイント(0～255)",) do |v|
+			$blackpoint = v.map { |v| v.to_i / 255.0 }
 		end
 
 		$flac_audio = false

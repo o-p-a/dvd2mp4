@@ -1,0 +1,151 @@
+#!/bin/sh
+
+# brightness は 0.1あたり29.42全体的に上がる → 1上げるには0.0034
+# contrast は 値がそのまま係数 不変点は132.4444... かかるオフセットは62.7368
+#
+# 補正後の不変点が132.4444...になるよう、brightnessを調整
+# brightness=((b-a)*132.4444/255+a-132.4444)/(29.42/0.1)
+# 0-255になるよう、contrastを調整
+# contrast=255/(b-a)
+
+
+# → a～b を 0～255 にストレッチするには、
+#  brightness=(a-(119.2/0.9)*(255/(b-a)-1))/(29.42/0.1)
+#  contrast=255/(b-a)
+#
+
+# 96～255の場合 br=0.054499 co=1.604
+# ffmpeg -r 30 -loop 1 -i 輝度確認用2.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=-0.598:contrast=1.604 wk.mp4 -y
+ffmpeg -r 30 -loop 1 -i 輝度確認用2.png -pix_fmt yuv420p -t 10 -filter:v colorlevels=rimin=0.376:gimin=0.376:bimin=0.376:rimax=1:gimax=1:bimax=1 wk.mp4 -y
+ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out96-255.png -y
+
+# 0～160の場合 br=-0.267297 co=1.594
+# ffmpeg -r 30 -loop 1 -i 輝度確認用2.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=-0.167716:contrast=1.594 wk.mp4 -y
+ffmpeg -r 30 -loop 1 -i 輝度確認用2.png -pix_fmt yuv420p -t 10 -filter:v colorlevels=rimin=0:gimin=0:bimin=0:rimax=0.625:gimax=0.625:bimax=0.625 wk.mp4 -y
+ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out0-160.png -y
+
+# 32～224の場合 br=-0.038947 co=1.328
+# ffmpeg -r 30 -loop 1 -i 輝度確認用2.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.002453:contrast=1.328 wk.mp4 -y
+ffmpeg -r 30 -loop 1 -i 輝度確認用2.png -pix_fmt yuv420p -t 10 -filter:v colorlevels=rimin=0.1255:gimin=0.1255:bimin=0.1255:rimax=0.878:gimax=0.878:bimax=0.878 wk.mp4 -y
+ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out32-224.png -y
+
+# 0～255の場合 br=0 co=1
+
+
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out.png -y
+#
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.1 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.1.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.2 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.2.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.3 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.3.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.4 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.4.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.5 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.5.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.6 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.6.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.7 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.7.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.8 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.8.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=0.9 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br0.9.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=brightness=1.0 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_br1.0.png -y
+#
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.1 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.1.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.2 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.2.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.3 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.3.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.4 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.4.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.5 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.5.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.6 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.6.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.7 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.7.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.8 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.8.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=contrast=1.9 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_co1.9.png -y
+#
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.1 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.1.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.2 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.2.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.3 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.3.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.4 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.4.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.5 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.5.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.6 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.6.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.7 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.7.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=gamma=1.8 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_gamma1.8.png -y
+
+
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.1 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.1.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.2 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.2.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.3 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.3.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.4 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.4.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.5 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.5.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.6 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.6.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.7 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.7.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.8 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.8.png -y
+#
+# ffmpeg -r 30 -loop 1 -i 輝度確認用.png -pix_fmt yuv420p -t 10 -filter:v eq=saturation=1.9 wk.mp4 -y
+# ffmpeg -i wk.mp4 -ss 5 -r 1 -t 0.1 out_sat1.9.png -y
+
+
+rm -f wk.mp4
