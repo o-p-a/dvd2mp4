@@ -1001,13 +1001,11 @@ def main(args)
 		opt.on("--hq",
 			"高画質,高音質でエンコードする") do
 			$quality_v = "h"
-			$crf = 19.0
 			$quality_a = "h"
 		end
 		opt.on("--hq:v",
 			"高画質でエンコードする") do
 			$quality_v = "h"
-			$crf = 19.0
 		end
 		opt.on("--hq:a",
 			"高音質でエンコードする") do
@@ -1016,20 +1014,18 @@ def main(args)
 		opt.on("--lq",
 			"低画質,低音質でエンコードする") do
 			$quality_v = "l"
-			$crf = 24.0
 			$quality_a = "l"
 		end
 		opt.on("--lq:v",
 			"低画質でエンコードする") do
 			$quality_v = "l"
-			$crf = 24.0
 		end
 		opt.on("--lq:a",
 			"低音質でエンコードする") do
 			$quality_a = "l"
 		end
 
-		$crf = 21.0
+		$crf = nil
 		opt.on("--crf=n", Float,
 			"VBR画質を指定する(0:ロスレス - 21.0:デフォルト - 51:低)") do |v|
 			$crf = v
@@ -1111,6 +1107,17 @@ def main(args)
 
 		if $flac_audio
 			$quality_a = nil
+		end
+
+		if !$crf
+			case $quality_v
+			when "h"
+				$crf = 19.0
+			when "l"
+				$crf = 24.0
+			else
+				$crf = 21.0
+			end
 		end
 
 		if $testmode
