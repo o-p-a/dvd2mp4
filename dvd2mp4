@@ -699,38 +699,38 @@ def dvd2mp4(vts_num)
 			cmd2 += ["-bufsize:v", "2.5M"]
 		end
 		cmd2 += ["-tune:v", $video_tune]  if $video_tune
-		aspect_video = $aspect_video || pd[:streams_v].first[:display_aspect_ratio]
-		if $rotate_video == 90 || $rotate_video == 270
-			aspect_video = "#{$2}:#{$1}"  if aspect_video =~ /(\d+):(\d)+/
+		video_aspect = $video_aspect || pd[:streams_v].first[:display_aspect_ratio]
+		if $video_rotate == 90 || $video_rotate == 270
+			video_aspect = "#{$2}:#{$1}"  if video_aspect =~ /(\d+):(\d)+/
 		end
-		cmd2 += ["-aspect:v", aspect_video]
+		cmd2 += ["-aspect:v", video_aspect]
 
 		filters_v = []
 
 		filters_v << ($testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field")  if deinterlace
 
-		if $crop_video
-			crop_w = pd[:streams_v].first[:width] - $crop_video[2] - $crop_video[3]
-			crop_h = pd[:streams_v].first[:height] - $crop_video[0] - $crop_video[1]
-			crop_x = $crop_video[2]
-			crop_y = $crop_video[0]
+		if $whitepoint || $blackpoint
+			w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
+			b = $blackpoint ? [$blackpoint[0] || 0, $blackpoint[1] || 0, $blackpoint[2] || 0] : [0,0,0]
+			filters_v << "colorlevels=rimin=#{b[0]}:gimin=#{b[1]}:bimin=#{b[2]}:rimax=#{w[0]}:gimax=#{w[1]}:bimax=#{w[2]}"
+		end
+
+		if $video_crop
+			crop_w = pd[:streams_v].first[:width] - $video_crop[2] - $video_crop[3]
+			crop_h = pd[:streams_v].first[:height] - $video_crop[0] - $video_crop[1]
+			crop_x = $video_crop[2]
+			crop_y = $video_crop[0]
 			filters_v << "crop=w=#{crop_w}:h=#{crop_h}:x=#{crop_x}:y=#{crop_y}"
 			filters_v << "scale=#{pd[:streams_v].first[:width]}:#{pd[:streams_v].first[:height]}"
 		end
 
-		case $rotate_video
+		case $video_rotate
 		when 90
 			filters_v << "transpose=clock"
 		when 180
 			filters_v << "hflip" << "vflip"
 		when 270
 			filters_v << "transpose=cclock"
-		end
-
-		if $whitepoint || $blackpoint
-			w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
-			b = $blackpoint ? [$blackpoint[0] || 0, $blackpoint[1] || 0, $blackpoint[2] || 0] : [0,0,0]
-			filters_v << "colorlevels=rimin=#{b[0]}:gimin=#{b[1]}:bimin=#{b[2]}:rimax=#{w[0]}:gimax=#{w[1]}:bimax=#{w[2]}"
 		end
 
 		cmd2 += ["-filter:v", filters_v.join(",")]  if filters_v.size > 0
@@ -986,7 +986,7 @@ def main(args)
 
 		$delete_chpt_sec = 0
 		opt.on("--delete-short-chapter=n", Float,
-			"n秒より短いチャプターマークを削除する") do |v|
+			"n秒より短いチャプターを削除する") do |v|
 			$delete_chpt_sec = v
 		end
 
@@ -1031,33 +1031,33 @@ def main(args)
 			$crf = v
 		end
 
-		$crop_video = nil
+		$video_crop = nil
 		opt.on("--crop-video=t,b,l,r", Array,
-			"映像を切り取り(上,下,左,右)",) do |v|
-			$crop_video = v.map { |v| v.to_i }
+			"映像を切り取り(上,下,左,右)") do |v|
+			$video_crop = v.map { |v| v.to_i }
 		end
 
-		$aspect_video = nil
+		$video_aspect = nil
 		opt.on("--aspect-video=r", String,
-			"映像のアスペクト比(w:h)",) do |v|
-			$aspect_video = v
+			"映像のアスペクト比(w:h)") do |v|
+			$video_aspect = v
 		end
 
-		$rotate_video = nil
+		$video_rotate = nil
 		opt.on("--rotate-video=n", String, ["90", "180", "270"],
-			"映像を回転(90|180|270)",) do |v|
-			$rotate_video = v.to_i
+			"映像を回転(90|180|270)") do |v|
+			$video_rotate = v.to_i
 		end
 
 		$whitepoint = nil
 		opt.on("--white-point=r,g,b", Array,
-			"映像のホワイトポイント(0～255)",) do |v|
+			"映像のホワイトポイント(0～255)") do |v|
 			$whitepoint = v.map { |v| v.to_i / 255.0 }
 		end
 
 		$blackpoint = nil
 		opt.on("--black-point=r,g,b", Array,
-			"映像のブラックポイント(0～255)",) do |v|
+			"映像のブラックポイント(0～255)") do |v|
 			$blackpoint = v.map { |v| v.to_i / 255.0 }
 		end
 
@@ -1069,7 +1069,7 @@ def main(args)
 
 		$adjust_fps = true
 		opt.on("--[no-]adjust-fps",
-			"チャプター時間のfps調整を行う") do |v|
+			"チャプター時間のfpsの調整を行う") do |v|
 			$adjust_fps = v
 		end
 
@@ -1121,7 +1121,7 @@ def main(args)
 		end
 
 		if $testmode
-			$crf = 32.0
+			$crf = 36.0
 			$flac_audio = false
 			$quality_v = "l"
 			$quality_a = "l"
