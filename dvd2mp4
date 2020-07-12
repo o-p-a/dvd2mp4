@@ -715,6 +715,13 @@ def dvd2mp4(vts_num)
 			filters_v << "colorlevels=rimin=#{b[0]}:gimin=#{b[1]}:bimin=#{b[2]}:rimax=#{w[0]}:gimax=#{w[1]}:bimax=#{w[2]}"
 		end
 
+		if $video_gamma || $video_saturation
+			eq = []
+			eq << "gamma=#{$video_gamma}"  if $video_gamma
+			eq << "saturation=#{$video_saturation}"  if $video_saturation
+			filters_v << "eq=#{eq.join(":")}"
+		end
+
 		if $video_crop
 			crop_w = pd[:streams_v].first[:width] - $video_crop[2] - $video_crop[3]
 			crop_h = pd[:streams_v].first[:height] - $video_crop[0] - $video_crop[1]
@@ -1059,6 +1066,18 @@ def main(args)
 		opt.on("--black-point=r,g,b", Array,
 			"映像のブラックポイント(0～255)") do |v|
 			$blackpoint = v.map { |v| v.to_i / 255.0 }
+		end
+
+		$video_gamma = nil
+		opt.on("--gamma=n", Float,
+			"映像のガンマ補正(0.1〜1(デフォルト)〜10)") do |v|
+			$video_gamma = v
+		end
+
+		$video_saturation = nil
+		opt.on("--saturation=n", Float,
+			"映像の彩度補正(0〜1(デフォルト)〜3.0)") do |v|
+			$video_saturation = v
 		end
 
 		$flac_audio = false
