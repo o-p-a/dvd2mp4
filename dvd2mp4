@@ -714,6 +714,11 @@ def dvd2mp4(vts_num)
 
 		filters_v << ($testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field")  if deinterlace
 
+		case $video_tune
+		when "animation"
+			filters_v << "hqdn3d"
+		end
+
 		if $whitepoint || $blackpoint
 			w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
 			b = $blackpoint ? [$blackpoint[0] || 0, $blackpoint[1] || 0, $blackpoint[2] || 0] : [0,0,0]
