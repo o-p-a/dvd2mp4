@@ -731,7 +731,7 @@ def dvd2mp4(vts_num)
 		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
 		cmd2 += ["-pix_fmt", "yuv420p"]
 		cmd2 += ["-crf:v", $crf.to_s]
-		if $quality_a == "l"
+		if $quality_v == "l"
 			cmd2 += ["-maxrate:v", "1.0M"]
 			cmd2 += ["-bufsize:v", "2.5M"]
 		end
@@ -1175,7 +1175,7 @@ def main(args)
 			when "h"
 				$crf = 19.0
 			when "l"
-				$crf = 24.0
+				$crf = 25.0
 			else
 				$crf = 21.0
 			end
