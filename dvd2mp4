@@ -748,7 +748,18 @@ def dvd2mp4(vts_num)
 		case $video_tune
 		when "animation"
 			filters_v << "hqdn3d"
+		else
+			filters_v << "vaguedenoiser"
 		end
+# atadenoise Adaptive Temporal Averaging Denoiser
+# bm3d Denoise frames using Block-Matching 3D algorithm
+# dctdnoiz Denoise frames using 2D DCT
+# fftdnoiz Denoise frames using 3D FFT 3次元周波数領域デノイズフィルタ
+# hqdn3d high precision/quality 3d denoise filter
+# nlmeans Denoise frames using Non-Local Means algorithm
+# owdenoise Overcomplete Wavelet denoiser
+# removegrain spatial denoiser for progressive video
+# vaguedenoiser wavelet based denoiser ウェーブレットデノイザ
 
 		if $whitepoint || $blackpoint
 			w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
