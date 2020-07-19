@@ -637,16 +637,6 @@ def dvd2mp4(vts_num)
 	# 指定長より短いチャプターは削除
 	pd[:chapters].delete_if { |c| c[:length] < $delete_chpt_sec }
 
-	# チャプター名
-	pd[:chapters].each_with_index do |chapter, ix|
-		title = $metadata[:chapter_name][ix]
-		if !title
-			$stdout.printf("チャプター #{ix+1} のタイトルが指定されていません\n")
-			# title = "Chapter #{ix+1}"
-		end
-		chapter[:title] = title
-	end
-
 	# 出力対象のチャプター数を数える
 	chapters_output = 0
 	pd[:chapters].each do |chapter|
@@ -657,24 +647,15 @@ def dvd2mp4(vts_num)
 		chapters_output += 1
 	end
 
-	# チャプター情報ファイルを作成
-	cfile = Tempfile.new(["chapter", ".txt"])
-	cfile.printf(";FFMETADATA1\n")
-	if !$split_chapter && chapters_output >= 2
-		pd[:chapters].each.with_index(1) do |chapter, ix|
-			next  if chapter[:title] == "omit"
-			next  if start_sec && chapter[:end] <= (start_sec + 0.5)
-			next  if end_sec && chapter[:start] >= (end_sec - 0.5)
-
-			cfile.printf("[CHAPTER]\n")
-			cfile.printf("TIMEBASE=1/1000000\n")
-			cfile.printf("START=%d\n", chapter[:start] * 1000000)
-			cfile.printf("END=%d\n", chapter[:end] * 1000000)
-			cfile.printf("title=%s\n", chapter[:title] || "Chapter #{ix}")
+	# チャプター名
+	pd[:chapters].each_with_index do |chapter, ix|
+		title = $metadata[:chapter_name][ix]
+		if !title
+			$stdout.printf("チャプター #{ix+1} のタイトルが指定されていません\n")
+			# title = "Chapter #{ix+1}"
 		end
+		chapter[:title] = title
 	end
-	cfile.flush
-	system("cat", cfile.path)  if $dryrun
 
 	# 対象VOB,IFOの決定
 	vobfiles = pd[:vobfiles]
@@ -718,8 +699,28 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile && streams_s_output >= 1
 	cmd2 += ["<<startpoiont>>"]
 	cmd2 += ["-i", vobfile]
-	cmd2 += ["-i", cfile.path]
-	cmd2 += ["-map_chapters", "1"]
+
+	# チャプター情報ファイルを作成
+	if !$split_chapter && chapters_output >= 2
+		cfile = Tempfile.new(["chapter", ".txt"])
+		cfile.printf(";FFMETADATA1\n")
+		pd[:chapters].each.with_index(1) do |chapter, ix|
+			next  if chapter[:title] == "omit"
+			next  if start_sec && chapter[:end] <= (start_sec + 0.5)
+			next  if end_sec && chapter[:start] >= (end_sec - 0.5)
+
+			cfile.printf("[CHAPTER]\n")
+			cfile.printf("TIMEBASE=1/1000000\n")
+			cfile.printf("START=%d\n", chapter[:start] * 1000000)
+			cfile.printf("END=%d\n", chapter[:end] * 1000000)
+			cfile.printf("title=%s\n", chapter[:title] || "Chapter #{ix}")
+		end
+		cfile.flush
+		system("cat", cfile.path)  if $dryrun
+
+		cmd2 += ["-i", cfile.path]
+		cmd2 += ["-map_chapters", "1"]
+	end
 
 	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
