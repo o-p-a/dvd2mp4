@@ -642,14 +642,14 @@ def dvd2mp4(vts_num)
 		title = $metadata[:chapter_name][ix]
 		if !title
 			$stdout.printf("チャプター #{ix+1} のタイトルが指定されていません\n")
-			title = "Chapter #{ix+1}"
+			# title = "Chapter #{ix+1}"
 		end
 		chapter[:title] = title
 	end
 
 	# 出力対象のチャプター数を数える
 	chapters_output = 0
-	pd[:chapters].each.with_index(1) do |chapter, ix|
+	pd[:chapters].each do |chapter|
 		next  if chapter[:title] == "omit"
 		next  if start_sec && chapter[:end] <= (start_sec + 0.5)
 		next  if end_sec && chapter[:start] >= (end_sec - 0.5)
@@ -670,7 +670,7 @@ def dvd2mp4(vts_num)
 			cfile.printf("TIMEBASE=1/1000000\n")
 			cfile.printf("START=%d\n", chapter[:start] * 1000000)
 			cfile.printf("END=%d\n", chapter[:end] * 1000000)
-			cfile.printf("title=%s\n", chapter[:title])
+			cfile.printf("title=%s\n", chapter[:title] || "Chapter #{ix}")
 		end
 	end
 	cfile.flush
@@ -887,10 +887,8 @@ def dvd2mp4(vts_num)
 				else
 					cmd2c += ["-metadata", "title=#{title}"]
 				end
-			else
-				title = "#{ix}"
 			end
-			dst_filename = dst_basename + " " + title + ".mp4"
+			dst_filename = dst_basename + " #{ix}#{title ? (' ' + title) : ''}.mp4"
 			cmd2c += [dst_filename]
 
 			if $dryrun
