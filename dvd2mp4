@@ -717,6 +717,7 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-y"]  if $overwrite || $testmode
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile
 	cmd2 += ["-i", "-"]
+	cmd2 += ["<<startpoiont>>"]
 	cmd2 += ["-i", vobfile]
 	cmd2 += ["-i", cfile.path]
 	cmd2 += ["-map_chapters", "1"]
@@ -724,7 +725,6 @@ def dvd2mp4(vts_num)
 	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
 	cmd2 += ["-movflags", "+faststart+disable_chpl"]
-	cmd2 += ["<<startpoiont>>"]
 	cmd2 += ["<<duration>>"]
 
 	if streams_v_output >= 1
