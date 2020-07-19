@@ -298,16 +298,21 @@ def probe_vts_data(vts_num)
 	streams_v = []
 	streams_a = []
 	streams_s = []
+	ffid = 0
 	streams.each.with_index(1) do |stream, ix|
-		stream[:ffid] = "0:#{stream[:index]}"
 		stream[:ix] = ix
 		fail "ffprobeでのストリーム番号に飛び番があります"  if stream[:index] != ix-1
 
 		case stream[:codec_type]
 		when "video"
 			streams_v << stream
+			stream[:ffid] = "0:#{ffid}"
+			ffid += 1
 		when "audio"
 			streams_a << stream
+			stream[:ffid] = "0:#{ffid}"
+			ffid += 1
+
 			streamid = stream[:id].to_i(0)
 			lsdvd = nil
 			titles.each do |title|
@@ -328,6 +333,9 @@ def probe_vts_data(vts_num)
 			end
 		when "subtitle"
 			streams_s << stream
+			stream[:ffid] = "0:#{ffid}"
+			ffid += 1
+
 			streamid = stream[:id].to_i(0)
 			lsdvd = nil
 			titles.each do |title|
@@ -670,13 +678,36 @@ def dvd2mp4(vts_num)
 
 	# 対象VOB,IFOの決定
 	vobfiles = pd[:vobfiles]
+	if $dryrun
+		vobfile = vobfiles.first
+	else
+		vfile = Tempfile.new(["dvd2mp4", ".vob"])
+		vobfile = vfile.path
+		cmdv1 = ["cat"]
+		cmdv1 += vobfiles
+
+		cmdv2 = [FFMPEG_CMD]
+		cmdv2 += ["-hide_banner"]
+		cmdv2 += ["-loglevel", "error"]
+		cmdv2 += ["-analyzeduration", FF_ANALYZEDURATION]
+		cmdv2 += ["-probesize", FF_PROBESIZE]
+		cmdv2 += ["-y"]
+		cmdv2 += ["-i", "-"]
+		cmdv2 += ["-codec", "copy"]
+		cmdv2 += ["-map", "0", "-map", "-0:d"]
+		cmdv2 += ["-f", "vob"]
+		cmdv2 += [vfile.path]
+
+		printf("Writing work VOB...\n")
+		Open3.pipeline(cmdv1, cmdv2)
+		# fail "#{$?}"  if $? != 0
+		printf("...Complete.\n")
+	end
+
 	ifofiles = pd[:ifofiles]
 	ifofile = ifofiles.first
 
 	# 変換本体
-
-	cmd1 = ["cat"]
-	cmd1 += vobfiles
 
 	cmd2 = [FFMPEG_CMD]
 	cmd2 += ["-hide_banner"]
@@ -686,6 +717,7 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-y"]  if $overwrite || $testmode
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile
 	cmd2 += ["-i", "-"]
+	cmd2 += ["-i", vobfile]
 	cmd2 += ["-i", cfile.path]
 	cmd2 += ["-map_chapters", "1"]
 
@@ -859,13 +891,13 @@ def dvd2mp4(vts_num)
 				title = "#{ix}"
 			end
 			dst_filename = dst_basename + " " + title + ".mp4"
+			cmd2c += [dst_filename]
 
 			if $dryrun
-				p cmd1
-				p cmd2c + [dst_filename]
+				p cmd2c
 			else
-				cmd2c += [dst_filename]
-				Open3.pipeline(cmd1, cmd2c)
+				system(*cmd2c)
+				fail "#{$?}"  if $? != 0
 
 				if File.exist?(dst_filename)
 					timestamp_src = (ifofiles + vobfiles).first
@@ -879,13 +911,13 @@ def dvd2mp4(vts_num)
 		cmd2[cmd2.index("<<startpoiont>>"), 1] = start_sec ? ["-ss", start_sec.round(3).to_s] : []
 		cmd2[cmd2.index("<<duration>>"), 1] = duration_sec ? ["-t", duration_sec.round(3).to_s] : []
 		dst_filename = dst_basename + ".mp4"
+		cmd2 += [dst_filename]
 
 		if $dryrun
-			p cmd1
-			p cmd2 + [dst_filename]
+			p cmd2
 		else
-			cmd2 += [dst_filename]
-			Open3.pipeline(cmd1, cmd2)
+			system(*cmd2)
+			fail "#{$?}"  if $? != 0
 
 			if File.exist?(dst_filename)
 				timestamp_src = (ifofiles + vobfiles).first
