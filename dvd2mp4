@@ -216,6 +216,7 @@ def probe_vts_data(vts_num)
 		titles = []
 	end
 
+	# セル一覧を作成
 	cells = []
 	ctmap = {0 => 0.0}
 	titles.each do |title|
@@ -236,6 +237,7 @@ def probe_vts_data(vts_num)
 		end
 	end
 	cells.sort_by! { |c| c[:first_sector] }
+	# 先頭から順に開始位置と終了位置を特定
 	cells.each.with_index(1) do |cell, ix|
 		startsec = ctmap[cell[:first_sector]]
 		fail "セル情報が不連続のため、開始時刻を確定できません"  if !startsec
@@ -247,6 +249,7 @@ def probe_vts_data(vts_num)
 		cell[:end] = endsec
 	end
 
+	# チャプター一覧を作成
 	chapters = []
 	titles.each do |title|
 		title[:chapter].each do |chapter|
@@ -268,6 +271,7 @@ def probe_vts_data(vts_num)
 		end
 	end
 	chapters.sort_by! { |c| c[:first_sector] }
+	# 開始位置,終了位置を決定
 	chapters.each.with_index(1) do |chapter, ix|
 		startsec = ctmap[chapter[:first_sector]]
 		fail "チャプター開始時刻を確定できません"  if !startsec
@@ -277,6 +281,30 @@ def probe_vts_data(vts_num)
 		chapter[:start] = startsec
 		chapter[:end] = endsec
 	end
+	# 次のチャプターを突き抜けてしまっているチャプターを調整
+	chapters.each_with_index do |chapter, i|
+		next_chapter = chapters[i+1]
+		break  if !next_chapter
+
+		if chapter[:end] > next_chapter[:start]
+			chapter[:end] = next_chapter[:start]
+			chapter[:length] = chapter[:end] - chapter[:start]
+		end
+	end
+	# 指定長より短いチャプターを削除
+	prev_chapter = nil
+	chapters.each do |chapter|
+		if prev_chapter && chapter[:length] < $delete_chpt_sec
+			prev_chapter[:length] += chapter[:length]
+			prev_chapter[:end] += chapter[:length]
+			chapter[:start] += chapter[:length]
+			chapter[:length] = 0
+		else
+			prev_chapter = chapter
+		end
+	end
+	# 長さ0のチャプターを削除
+	chapters.delete_if { |c| c[:length] == 0 }
 
 	vobfiles, ifofiles = get_vobfiles(vts_num)
 
@@ -636,9 +664,6 @@ def dvd2mp4(vts_num)
 	streams_v_output = pd[:streams_v].count { |s| s[:title] != "omit" }
 	streams_a_output = pd[:streams_a].count { |s| s[:title] != "omit" }
 	streams_s_output = pd[:streams_s].count { |s| s[:title] != "omit" }
-
-	# 指定長より短いチャプターは削除
-	pd[:chapters].delete_if { |c| c[:length] < $delete_chpt_sec }
 
 	# 出力対象のチャプター数を数える
 	chapters_output = 0
@@ -1059,7 +1084,7 @@ def main(args)
 		$delete_chpt_sec = 0
 		opt.on("--delete-short-chapter=n", Float,
 			"n秒より短いチャプターを削除する") do |v|
-			$delete_chpt_sec = v
+			$delete_chpt_sec = [v,0].max
 		end
 
 		$video_tune = nil
