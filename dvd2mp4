@@ -355,7 +355,10 @@ def probe_vts_data(vts_num)
 				fail sprintf("言語コードが変換できません: %s", stream[:langcode])  if !LANGTABLE.include?(stream[:langcode])
 			end
 		when "data"
-			# NOP
+			if $simple_concat
+				stream[:ffid] = "0:#{ffid}"
+				ffid += 1
+			end
 		else
 			fail "不明なcodec_typeです: #{stream[:codec_type]}"
 		end
@@ -662,26 +665,36 @@ def dvd2mp4(vts_num)
 	if $dryrun
 		vobfile = vobfiles.first
 	else
+		printf("Writing work VOB...\n")
 		vfile = Tempfile.new(["dvd2mp4", ".vob"])
 		vobfile = vfile.path
-		cmdv1 = ["cat"]
-		cmdv1 += vobfiles
 
-		cmdv2 = [FFMPEG_CMD]
-		cmdv2 += ["-hide_banner"]
-		cmdv2 += ["-loglevel", "error"]
-		cmdv2 += ["-analyzeduration", FF_ANALYZEDURATION]
-		cmdv2 += ["-probesize", FF_PROBESIZE]
-		cmdv2 += ["-y"]
-		cmdv2 += ["-i", "-"]
-		cmdv2 += ["-codec", "copy"]
-		cmdv2 += ["-map", "0", "-map", "-0:d"]
-		cmdv2 += ["-f", "vob"]
-		cmdv2 += [vfile.path]
+		if $simple_concat
+			cmdv1 = ["cat"]
+			cmdv1 += vobfiles
+			system(*cmdv1, out:vfile.path)
+			fail "#{$?}"  if $? != 0
+		else
+			cmdv1 = ["cat"]
+			cmdv1 += vobfiles
 
-		printf("Writing work VOB...\n")
-		Open3.pipeline(cmdv1, cmdv2)
-		# fail "#{$?}"  if $? != 0
+			cmdv2 = [FFMPEG_CMD]
+			cmdv2 += ["-hide_banner"]
+			# cmdv2 += ["-loglevel", "error"]
+			cmdv2 += ["-analyzeduration", FF_ANALYZEDURATION]
+			cmdv2 += ["-probesize", FF_PROBESIZE]
+			cmdv2 += ["-y"]
+			cmdv2 += ["-i", "-"]
+			cmdv2 += ["-codec", "copy"]
+			cmdv2 += ["-map", "0", "-map", "-0:d"]
+			cmdv2 += ["-f", "vob"]
+			cmdv2 += ["-ss", pd[:chapters].map{ |c| c[:start] }.min.to_s]
+			cmdv2 += ["-to", pd[:chapters].map{ |c| c[:end] }.max.to_s]
+			cmdv2 += [vfile.path]
+
+			Open3.pipeline(cmdv1, cmdv2)
+			# fail "#{$?}"  if $? != 0
+		end
 		printf("...Complete.\n")
 	end
 
@@ -697,7 +710,7 @@ def dvd2mp4(vts_num)
 	cmd2 += ["-probesize", FF_PROBESIZE]
 	cmd2 += ["-y"]  if $overwrite || $testmode
 	cmd2 += ["-ifo_palette", ifofile]  if ifofile && streams_s_output >= 1
-	cmd2 += ["<<startpoiont>>"]
+	cmd2 += ["<<startpoiont>>"]  if !$simple_concat
 	cmd2 += ["-i", vobfile]
 
 	# チャプター情報ファイルを作成
@@ -725,6 +738,7 @@ def dvd2mp4(vts_num)
 	# cmd2 += ["-max_muxing_queue_size", "2048"]
 	cmd2 += ["-f", "mp4"]
 	cmd2 += ["-movflags", "+faststart+disable_chpl"]
+	cmd2 += ["<<startpoiont>>"]  if $simple_concat
 	cmd2 += ["<<duration>>"]
 
 	if streams_v_output >= 1
@@ -1147,6 +1161,12 @@ def main(args)
 		opt.on("--[no-]strict-length",
 			"再生時間を厳密に測定する") do |v|
 			$strict_length = v
+		end
+
+		$simple_concat = false
+		opt.on("--[no-]simple-concat",
+			"VOBファイルを単純結合する") do |v|
+			$simple_concat = v
 		end
 
 		$overwrite = false
