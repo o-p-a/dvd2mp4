@@ -585,7 +585,6 @@ def dvd2mp4(vts_num)
 			end
 		end
 	end
-pp output_chapters
 
 	# ファイルのメタ情報を決定
 	if !$metadata[:album_name]
@@ -751,8 +750,8 @@ pp output_chapters
 
 	# 変換本体
 	output_chapters.each do |output_chapter|
-p		start_sec = pd[:chapters][output_chapter.begin][:start]
-p		end_sec = pd[:chapters][output_chapter.end][:end]
+		start_sec = pd[:chapters][output_chapter.begin][:start]
+		end_sec = pd[:chapters][output_chapter.end][:end]
 
 		cmd2 = [FFMPEG_CMD]
 		cmd2 += ["-hide_banner"]
@@ -809,15 +808,6 @@ p		end_sec = pd[:chapters][output_chapter.end][:end]
 			else
 				filters_v << "vaguedenoiser"
 			end
-# atadenoise Adaptive Temporal Averaging Denoiser
-# bm3d Denoise frames using Block-Matching 3D algorithm
-# dctdnoiz Denoise frames using 2D DCT
-# fftdnoiz Denoise frames using 3D FFT 3次元周波数領域デノイズフィルタ
-# hqdn3d high precision/quality 3d denoise filter
-# nlmeans Denoise frames using Non-Local Means algorithm
-# owdenoise Overcomplete Wavelet denoiser
-# removegrain spatial denoiser for progressive video
-# vaguedenoiser wavelet based denoiser ウェーブレットデノイザ
 
 			if $whitepoint || $blackpoint
 				w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
@@ -1049,8 +1039,8 @@ def main(args)
 		end
 
 		$output_chapters = nil
-		opt.on("--split-chapter[=n,n-n,...]", String,
-			"チャプターごとに分割して出力する") do |v|
+		opt.on("--chapter-select[=n,n-n,...]", String,
+			"出力するチャプターを指定する(引数なしでチャプター毎に分割)") do |v|
 			$output_chapters = (v || "").split(",").map do |c|
 				case c
 				when /^\s*(\d+)\s*$/
@@ -1112,7 +1102,7 @@ def main(args)
 		$delete_chpt_sec = 0
 		opt.on("--delete-short-chapter=n", Float,
 			"n秒より短いチャプターを削除する") do |v|
-			$delete_chpt_sec = [v,0].max
+			$delete_chpt_sec = (v<0) ? 0 : v
 		end
 
 		$video_tune = nil
@@ -1157,19 +1147,19 @@ def main(args)
 		end
 
 		$video_crop = nil
-		opt.on("--crop-video=t,b,l,r", Array,
+		opt.on("--crop=t,b,l,r", Array,
 			"映像を切り取り(上,下,左,右)") do |v|
 			$video_crop = v.map { |v| v.to_i }
 		end
 
 		$video_aspect = nil
-		opt.on("--aspect-video=r", String,
+		opt.on("--aspect=r", String,
 			"映像のアスペクト比(w:h)") do |v|
 			$video_aspect = v
 		end
 
 		$video_rotate = nil
-		opt.on("--rotate-video=n", String, ["90", "180", "270"],
+		opt.on("--rotate=n", String, ["90", "180", "270"],
 			"映像を回転(90|180|270)") do |v|
 			$video_rotate = v.to_i
 		end
@@ -1200,21 +1190,21 @@ def main(args)
 
 		$flac_audio = false
 		opt.on("-y", "--[no-]flacaudio",
-			"音声をFLACでエンコードする") do |v|
+			"音声をFLAC(可逆圧縮)でエンコードする") do |v|
 			$flac_audio = v
 		end
 
 		$adjust_fps = true
-		opt.on("--[no-]adjust-fps",
-			"チャプター時間のfpsの調整を行う") do |v|
-			$adjust_fps = v
-		end
+		# opt.on("--[no-]adjust-fps",
+		# 	"チャプター時間のfpsの調整を行う") do |v|
+		# 	$adjust_fps = v
+		# end
 
 		$strict_length = false
-		opt.on("--[no-]strict-length",
-			"再生時間を厳密に測定する") do |v|
-			$strict_length = v
-		end
+		# opt.on("--[no-]strict-length",
+		# 	"再生時間を厳密に測定する") do |v|
+		# 	$strict_length = v
+		# end
 
 		$simple_concat = false
 		opt.on("--[no-]simple-concat",
