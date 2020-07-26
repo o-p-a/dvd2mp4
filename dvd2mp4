@@ -1140,10 +1140,15 @@ def main(args)
 			$quality_a = "l"
 		end
 
-		$crf = nil
-		opt.on("--crf=n", Float,
-			"VBR画質を指定する(0:ロスレス - 21.0:デフォルト - 51:低)") do |v|
-			$crf = v
+		$crf_base = nil
+		$crf_offset = 0
+		opt.on("--crf=n", String,
+			"VBR画質を指定する(0:ロスレス - 21.0:デフォルト - 51:低|[+-]n)") do |v|
+			if v =~ /^[+-]/
+				$crf_offset = v.to_f
+			else
+				$crf_base = v.to_f
+			end
 		end
 
 		$video_crop = nil
@@ -1242,23 +1247,25 @@ def main(args)
 			$quality_a = nil
 		end
 
-		if !$crf
+		if !$crf_base
 			case $quality_v
 			when "h"
-				$crf = 19.0
+				$crf_base = 19.0
 			when "l"
-				$crf = 25.0
+				$crf_base = 23.0
 			else
-				$crf = 21.0
+				$crf_base = 21.0
 			end
 		end
 
 		if $testmode
-			$crf = 36.0
+			$crf_base = 36.0
 			$flac_audio = false
 			$quality_v = "l"
 			$quality_a = "l"
 		end
+
+		$crf = ($crf_base + $crf_offset).clamp(0.0, 51.0)
 
 		if args.empty?
 			if $probe_raw
