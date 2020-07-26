@@ -85,7 +85,8 @@ def pos2sec(pos, fr=nil) # Rational(30000,1001)
 end
 
 def vts_num_to_i(vts_num)
-	if vts_num =~ /^VTS_(\d+)$/i
+	case vts_num
+	when /^VTS_(\d+)$/i, /^v(\d+)$/i
 		i = $1.to_i
 	else
 		fail "'VTS_n'の形式で指定してください"
@@ -271,7 +272,7 @@ def probe_vts_data(vts_num)
 		end
 	end
 	chapters.sort_by! { |c| c[:first_sector] }
-	# 開始位置,終了位置を決定
+	# チャプター開始位置,終了位置を決定
 	chapters.each.with_index(1) do |chapter, ix|
 		startsec = ctmap[chapter[:first_sector]]
 		fail "チャプター開始時刻を確定できません"  if !startsec
@@ -408,9 +409,9 @@ def probe_vts_data(vts_num)
 end
 
 def measure_vob_duration(vts_num)
-	vobfiles, ifofiles = get_vobfiles(vts_num)
+	vobfiles, = get_vobfiles(vts_num)
 
-	vobtimes = []
+	vobtime = 0
 	vobfiles.each do |vobfile|
 		cmd = [FFPROBE_CMD]
 		cmd += ["-hide_banner"]
@@ -420,21 +421,16 @@ def measure_vob_duration(vts_num)
 		cmd += ["-i", vobfile]
 		r = Open3.capture3(*cmd)
 		ffprobe = JSON.parse(r[0], symbolize_names:true)
-		vobtimes << {
-			filename: vobfile,
-			start: ffprobe[:format][:start_time].to_f,
-			duration: ffprobe[:format][:duration].to_f,
-			end: ffprobe[:format][:start_time].to_f + ffprobe[:format][:duration].to_f,
-		}
+		vobtime += ffprobe[:format][:duration].to_f
 	end
 
-	return vobtimes.sum { |v| v[:duration] }
+	return vobtime
 end
 
 def measure_strict_duration(vts_num)
 	printf("Measuring strict VTS duration...\n")
 
-	vobfiles, ifofiles = get_vobfiles(vts_num)
+	vobfiles, = get_vobfiles(vts_num)
 	wfile = Tempfile.new(["vtsmeasure", ".wav"])
 
 	cmd1 = ["cat"]
@@ -569,13 +565,33 @@ end
 def dvd2mp4(vts_num)
 	pd = probe_vts_data(vts_num)
 
+	# 出力するチャプターの確定
+	output_chapters = []
+	if !$output_chapters
+		output_chapters << (0 .. pd[:chapters].length-1)
+	elsif $output_chapters.empty?
+		pd[:chapters].each_with_index do |chapter, i|
+			output_chapters << (i .. i)
+		end
+	else
+		$output_chapters.each do |oc|
+			if oc.is_a?(Range)
+				b = oc.begin.clamp(0, pd[:chapters].length-1)
+				e = oc.end.clamp(0, pd[:chapters].length-1)
+				output_chapters << (b .. e)
+			else
+				oc = oc.clamp(0, pd[:chapters].length-1)
+				output_chapters << (oc .. oc)
+			end
+		end
+	end
+pp output_chapters
+
 	# ファイルのメタ情報を決定
 	if !$metadata[:album_name]
 		if pd[:disc][:title] && pd[:disc][:title] != "unknown"
-			$stdout.printf("アルバム名が指定されていません: ディスク情報から得た %s とします\n", pd[:disc][:title])
+			$stdout.printf("アルバム名をディスク情報から取得します: %s\n", pd[:disc][:title])
 			$metadata[:album_name] = pd[:disc][:title]
-		# else
-		# 	$stdout.printf("アルバム名が指定されていません\n")
 		end
 	end
 
@@ -583,11 +599,7 @@ def dvd2mp4(vts_num)
 		$stdout.printf("タイトルが指定されていません\n")
 	end
 
-	# if !$metadata[:title_num]
-	# 	$stdout.printf("タイトル番号が指定されていません\n")
-	# end
-
-	# 出力ファイル名を生成
+	# 出力ファイル名のベース部分を生成
 	if $metadata[:title_name]
 		if $metadata[:title_num]
 			dst_basename = "#{$metadata[:title_num]} #{$metadata[:title_name]}".strip
@@ -616,12 +628,8 @@ def dvd2mp4(vts_num)
 		end
 	end
 
-	# ストリームのタイトル等を決定
-	deinterlace = false
+	# ストリームのメタ情報を決定
 	pd[:streams_v].each_with_index do |stream, ix|
-		if stream[:field_order] && stream[:field_order] != "progressive"
-			deinterlace = true
-		end
 		title = $metadata[:s_video_name][ix]
 		# if !title
 		# 	$stdout.printf("ビデオストリーム #{ix+1} のタイトルが指定されていません\n")
@@ -675,7 +683,7 @@ def dvd2mp4(vts_num)
 		chapters_output += 1
 	end
 
-	# チャプター名
+	# チャプター名を決定
 	pd[:chapters].each_with_index do |chapter, ix|
 		title = $metadata[:chapter_name][ix]
 		if !title
@@ -685,10 +693,22 @@ def dvd2mp4(vts_num)
 		chapter[:title] = title
 	end
 
+	# チャプター情報ファイルを作成
+	cfile = Tempfile.new(["chapter", ".txt"])
+	cfile.printf(";FFMETADATA1\n")
+	pd[:chapters].each.with_index(1) do |chapter, ix|
+		cfile.printf("[CHAPTER]\n")
+		cfile.printf("TIMEBASE=1/1000000\n")
+		cfile.printf("START=%d\n", chapter[:start] * 1000000)
+		cfile.printf("END=%d\n", chapter[:end] * 1000000)
+		cfile.printf("title=%s\n", chapter[:title] || "Chapter")
+	end
+	cfile.flush
+	system("cat", cfile.path)  if $dryrun
+
 	# 対象VOB,IFOの決定
-	vobfiles = pd[:vobfiles]
 	if $dryrun
-		vobfile = vobfiles.first
+		vobfile = pd[:vobfiles].first
 	else
 		printf("Writing work VOB...\n")
 		vfile = Tempfile.new(["dvd2mp4", ".vob"])
@@ -696,16 +716,16 @@ def dvd2mp4(vts_num)
 
 		if $simple_concat
 			cmdv1 = ["cat"]
-			cmdv1 += vobfiles
+			cmdv1 += pd[:vobfiles]
 			system(*cmdv1, out:vfile.path)
 			fail "#{$?}"  if $? != 0
 		else
 			cmdv1 = ["cat"]
-			cmdv1 += vobfiles
+			cmdv1 += pd[:vobfiles]
 
 			cmdv2 = [FFMPEG_CMD]
 			cmdv2 += ["-hide_banner"]
-			# cmdv2 += ["-loglevel", "error"]
+			cmdv2 += ["-loglevel", "error"]
 			cmdv2 += ["-analyzeduration", FF_ANALYZEDURATION]
 			cmdv2 += ["-probesize", FF_PROBESIZE]
 			cmdv2 += ["-y"]
@@ -723,74 +743,72 @@ def dvd2mp4(vts_num)
 		printf("...Complete.\n")
 	end
 
-	ifofiles = pd[:ifofiles]
-	ifofile = ifofiles.first
+	ifofile = pd[:ifofiles].first
 
-	# 変換本体
-
-	cmd2 = [FFMPEG_CMD]
-	cmd2 += ["-hide_banner"]
-	cmd2 += ["-loglevel", "info"]
-	cmd2 += ["-analyzeduration", FF_ANALYZEDURATION]
-	cmd2 += ["-probesize", FF_PROBESIZE]
-	cmd2 += ["-y"]  if $overwrite || $testmode
-	cmd2 += ["-ifo_palette", ifofile]  if ifofile && streams_s_output >= 1
-	cmd2 += ["<<startpoiont>>"]  if !$simple_concat
-	cmd2 += ["-i", vobfile]
-
-	# チャプター情報ファイルを作成
-	if !$split_chapter && chapters_output >= 2
-		cfile = Tempfile.new(["chapter", ".txt"])
-		cfile.printf(";FFMETADATA1\n")
-		pd[:chapters].each.with_index(1) do |chapter, ix|
-			next  if chapter[:title] == "omit"
-			next  if start_sec && chapter[:end] <= (start_sec + 0.5)
-			next  if end_sec && chapter[:start] >= (end_sec - 0.5)
-
-			cfile.printf("[CHAPTER]\n")
-			cfile.printf("TIMEBASE=1/1000000\n")
-			cfile.printf("START=%d\n", chapter[:start] * 1000000)
-			cfile.printf("END=%d\n", chapter[:end] * 1000000)
-			cfile.printf("title=%s\n", chapter[:title] || "Chapter #{ix}")
-		end
-		cfile.flush
-		system("cat", cfile.path)  if $dryrun
-
-		cmd2 += ["-i", cfile.path]
-		cmd2 += ["-map_chapters", "1"]
+	if output_chapters.length < 1
+		fail "出力対象のチャプターがひとつもありません"
 	end
 
-	# cmd2 += ["-max_muxing_queue_size", "2048"]
-	cmd2 += ["-f", "mp4"]
-	cmd2 += ["-movflags", "+faststart+disable_chpl"]
-	cmd2 += ["<<startpoiont>>"]  if $simple_concat
-	cmd2 += ["<<duration>>"]
+	# 変換本体
+	output_chapters.each do |output_chapter|
+p		start_sec = pd[:chapters][output_chapter.begin][:start]
+p		end_sec = pd[:chapters][output_chapter.end][:end]
 
-	if streams_v_output >= 1
-		cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
-		cmd2 += ["-pix_fmt", "yuv420p"]
-		cmd2 += ["-crf:v", $crf.to_s]
-		if $quality_v == "l"
-			cmd2 += ["-maxrate:v", "1.0M"]
-			cmd2 += ["-bufsize:v", "2.5M"]
+		cmd2 = [FFMPEG_CMD]
+		cmd2 += ["-hide_banner"]
+		cmd2 += ["-loglevel", "info"]
+		cmd2 += ["-analyzeduration", FF_ANALYZEDURATION]
+		cmd2 += ["-probesize", FF_PROBESIZE]
+		cmd2 += ["-y"]  if $overwrite || $testmode
+		cmd2 += ["-ifo_palette", ifofile]  if ifofile && streams_s_output >= 1
+		cmd2 += ["-ss", start_sec.to_s]  if !$simple_concat
+		cmd2 += ["-i", vobfile] # #0
+
+		if output_chapter.begin != output_chapter.end
+			cmd2 += ["-i", cfile.path] # #1
+			cmd2 += ["-map_chapters", "1"]
 		end
-		cmd2 += ["-tune:v", $video_tune]  if $video_tune
-		video_aspect = $video_aspect || pd[:streams_v].first[:display_aspect_ratio]
-		if $video_rotate == 90 || $video_rotate == 270
-			video_aspect = "#{$2}:#{$1}"  if video_aspect =~ /(\d+):(\d)+/
-		end
-		cmd2 += ["-aspect:v", video_aspect]
 
-		filters_v = []
+		cmd2 += ["-ss", start_sec.to_s]  if $simple_concat
+		cmd2 += ["-to", end_sec.to_s]
+		# cmd2 += ["-max_muxing_queue_size", "2048"]
+		cmd2 += ["-f", "mp4"]
+		cmd2 += ["-movflags", "+faststart+disable_chpl"]
+		cmd2 += ["-metadata", "album=#{$metadata[:album_name]}"]  if $metadata[:album_name]
+		cmd2 += ["-metadata", "track=#{$metadata[:title_num]}"]  if $metadata[:title_num]
+		cmd2 += ["-metadata", "title=#{$metadata[:title_name]}"]  if $metadata[:title_name]
+		cmd2 += ["-metadata", "encoding_tool=#{$commandline}"]
 
-		filters_v << ($testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field")  if deinterlace
+		if streams_v_output >= 1
+			filters_v = []
 
-		case $video_tune
-		when "animation"
-			filters_v << "hqdn3d"
-		else
-			filters_v << "vaguedenoiser"
-		end
+			cmd2 += ["-preset:v", $testmode ? "ultrafast" : "veryslow"]
+			cmd2 += ["-tune:v", $video_tune]  if $video_tune
+			cmd2 += ["-pix_fmt:v", "yuv420p"]
+			cmd2 += ["-crf:v", $crf.to_s]
+			if $quality_v == "l"
+				cmd2 += ["-maxrate:v", "1.0M"]
+				cmd2 += ["-bufsize:v", "2.5M"]
+			end
+
+			# TODO:aspectはvfilterでやった方がシンプルにできるのでは
+			video_aspect = $video_aspect || pd[:streams_v].first[:display_aspect_ratio]
+			if $video_rotate == 90 || $video_rotate == 270
+				video_aspect = "#{$2}:#{$1}"  if video_aspect =~ /(\d+):(\d)+/
+			end
+			cmd2 += ["-aspect:v", video_aspect]
+
+			# インターレース解除
+			if pd[:streams_v].first[:field_order] && pd[:streams_v].first[:field_order] != "progressive"
+				filters_v << ($testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field")
+			end
+
+			case $video_tune
+			when "animation"
+				filters_v << "hqdn3d"
+			else
+				filters_v << "vaguedenoiser"
+			end
 # atadenoise Adaptive Temporal Averaging Denoiser
 # bm3d Denoise frames using Block-Matching 3D algorithm
 # dctdnoiz Denoise frames using 2D DCT
@@ -801,121 +819,140 @@ def dvd2mp4(vts_num)
 # removegrain spatial denoiser for progressive video
 # vaguedenoiser wavelet based denoiser ウェーブレットデノイザ
 
-		if $whitepoint || $blackpoint
-			w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
-			b = $blackpoint ? [$blackpoint[0] || 0, $blackpoint[1] || 0, $blackpoint[2] || 0] : [0,0,0]
-			filters_v << "colorlevels=rimin=#{b[0]}:gimin=#{b[1]}:bimin=#{b[2]}:rimax=#{w[0]}:gimax=#{w[1]}:bimax=#{w[2]}"
+			if $whitepoint || $blackpoint
+				w = $whitepoint ? [$whitepoint[0] || 1, $whitepoint[1] || 1, $whitepoint[2] || 1] : [1,1,1]
+				b = $blackpoint ? [$blackpoint[0] || 0, $blackpoint[1] || 0, $blackpoint[2] || 0] : [0,0,0]
+				filters_v << "colorlevels=rimin=#{b[0]}:gimin=#{b[1]}:bimin=#{b[2]}:rimax=#{w[0]}:gimax=#{w[1]}:bimax=#{w[2]}"
+			end
+
+			if $video_gamma || $video_saturation
+				eq = []
+				eq << "gamma=#{$video_gamma}"  if $video_gamma
+				eq << "saturation=#{$video_saturation}"  if $video_saturation
+				filters_v << "eq=#{eq.join(":")}"
+			end
+
+			if $video_crop
+				crop_w = pd[:streams_v].first[:width] - $video_crop[2] - $video_crop[3]
+				crop_h = pd[:streams_v].first[:height] - $video_crop[0] - $video_crop[1]
+				crop_x = $video_crop[2]
+				crop_y = $video_crop[0]
+				filters_v << "crop=w=#{crop_w}:h=#{crop_h}:x=#{crop_x}:y=#{crop_y}"
+				filters_v << "scale=#{pd[:streams_v].first[:width]}:#{pd[:streams_v].first[:height]}"
+			end
+
+			case $video_rotate
+			when 90
+				filters_v << "transpose=clock"
+			when 180
+				filters_v << "hflip" << "vflip"
+			when 270
+				filters_v << "transpose=cclock"
+			end
+
+			cmd2 += ["-filter:v", filters_v.join(",")]  if filters_v.size > 0
 		end
 
-		if $video_gamma || $video_saturation
-			eq = []
-			eq << "gamma=#{$video_gamma}"  if $video_gamma
-			eq << "saturation=#{$video_saturation}"  if $video_saturation
-			filters_v << "eq=#{eq.join(":")}"
-		end
-
-		if $video_crop
-			crop_w = pd[:streams_v].first[:width] - $video_crop[2] - $video_crop[3]
-			crop_h = pd[:streams_v].first[:height] - $video_crop[0] - $video_crop[1]
-			crop_x = $video_crop[2]
-			crop_y = $video_crop[0]
-			filters_v << "crop=w=#{crop_w}:h=#{crop_h}:x=#{crop_x}:y=#{crop_y}"
-			filters_v << "scale=#{pd[:streams_v].first[:width]}:#{pd[:streams_v].first[:height]}"
-		end
-
-		case $video_rotate
-		when 90
-			filters_v << "transpose=clock"
-		when 180
-			filters_v << "hflip" << "vflip"
-		when 270
-			filters_v << "transpose=cclock"
-		end
-
-		cmd2 += ["-filter:v", filters_v.join(",")]  if filters_v.size > 0
-	end
-
-	if streams_a_output >= 1
-		if $flac_audio
-			cmd2 += ["-codec:a", "flac", "-strict", "experimental"]
-		else
-			cmd2 += ["-codec:a", "libfdk_aac"]
-			cmd2 += ["-profile:a", "aac_low"]
-
-			case $quality_a
-			when "h"
-				cmd2 += ["-vbr:a", "5"]
-			when "l"
-				cmd2 += ["-vbr:a", "1"]
-				cmd2 += ["-cutoff:a", "14000"]
+		if streams_a_output >= 1
+			if $flac_audio
+				cmd2 += ["-codec:a", "flac", "-strict", "experimental"]
 			else
-				cmd2 += ["-vbr:a", "3"]
-				cmd2 += ["-cutoff:a", "18000"]
+				cmd2 += ["-codec:a", "libfdk_aac"]
+				cmd2 += ["-profile:a", "aac_low"]
+
+				case $quality_a
+				when "h"
+					cmd2 += ["-vbr:a", "5"]
+				when "l"
+					cmd2 += ["-vbr:a", "1"]
+					cmd2 += ["-cutoff:a", "14000"]
+				else
+					cmd2 += ["-vbr:a", "3"]
+					cmd2 += ["-cutoff:a", "18000"]
+				end
+			end
+		end
+
+		if streams_s_output >= 1
+			cmd2 += ["-codec:s", "dvd_subtitle"]
+		end
+
+		# ストリーム毎のオプション指定
+		scount = 0
+
+		pd[:streams_v].each do |stream|
+			next  if stream[:title] == "omit"
+
+			cmd2 += ["-map", stream[:ffid]]
+
+			if streams_v_output >= 2
+				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+			end
+
+			scount += 1
+		end
+
+		pd[:streams_a].each do |stream|
+			next  if stream[:title] == "omit"
+
+			cmd2 += ["-map", stream[:ffid]]
+
+			# if streams_a_output >= 2
+				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+			# end
+
+			scount += 1
+		end
+
+		pd[:streams_s].each do |stream|
+			next  if stream[:title] == "omit"
+
+			cmd2 += ["-map", stream[:ffid]]
+
+			# if streams_s_output >= 2
+				cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
+				cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
+				cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
+			# end
+
+			scount += 1
+		end
+
+		# TODO:サムネイル画像
+
+		# 出力ファイル名を生成
+#		if output_chapters.length == 1
+#			dst_filename = dst_basename + ".mp4"
+		if output_chapter.begin == output_chapter.end
+			dst_filename = dst_basename + " #{output_chapter.begin+1}.mp4"
+		else
+			dst_filename = dst_basename + " #{output_chapter.begin+1}-#{output_chapter.end+1}.mp4"
+		end
+		cmd2 += [dst_filename]
+
+		if $dryrun
+			p cmd2
+		else
+			system(*cmd2)
+			fail "#{$?}"  if $? != 0
+
+			if File.exist?(dst_filename)
+				timestamp_src = (pd[:ifofiles] + pd[:vobfiles]).first
+				File.utime(File.atime(timestamp_src), File.mtime(timestamp_src), dst_filename)
 			end
 		end
 	end
+return
 
-	if streams_s_output >= 1
-		cmd2 += ["-codec:s", "dvd_subtitle"]
-	end
 
-	cmd2 += ["-metadata", "album=#{$metadata[:album_name]}"]  if $metadata[:album_name]
-	cmd2 += ["-metadata", "track=#{$metadata[:title_num]}"]  if $metadata[:title_num]
-	cmd2 += ["-metadata", "title=#{$metadata[:title_name]}"]  if $metadata[:title_name]
-	cmd2 += ["-metadata", "encoding_tool=#{$commandline}"]
 
-	# 出力するストリームとストリーム毎のオプションを指定
 
-	scount = 0
-
-	pd[:streams_v].each do |stream|
-		next  if stream[:title] == "omit"
-
-		cmd2 += ["-map", stream[:ffid]]
-
-		if streams_v_output >= 2
-			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-			cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-			cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
-		end
-
-		scount += 1
-	end
-
-	pd[:streams_a].each do |stream|
-		next  if stream[:title] == "omit"
-
-		cmd2 += ["-map", stream[:ffid]]
-
-		# if streams_a_output >= 2
-			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-			cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-			cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
-		# end
-
-		scount += 1
-	end
-
-	pd[:streams_s].each do |stream|
-		next  if stream[:title] == "omit"
-
-		cmd2 += ["-map", stream[:ffid]]
-
-		# if streams_s_output >= 2
-			cmd2 += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
-			cmd2 += ["-metadata:s:#{scount}", "title=#{stream[:title]}"]
-			cmd2 += ["-metadata:s:#{scount}", "handler_name=#{stream[:title]}"]
-		# end
-
-		scount += 1
-	end
-
-# TODO:サムネイル画像
 
 	if $split_chapter
-		if chapters_output < 1
-			fail "出力対象のチャプターがひとつもありません"
-		end
 
 		pd[:chapters].each.with_index(1) do |chapter, ix|
 			next  if chapter[:title] == "omit"
@@ -948,7 +985,7 @@ def dvd2mp4(vts_num)
 				fail "#{$?}"  if $? != 0
 
 				if File.exist?(dst_filename)
-					timestamp_src = (ifofiles + vobfiles).first
+					timestamp_src = (pd[:ifofiles] + pd[:vobfiles]).first
 					atime = File.atime(timestamp_src)
 					mtime = File.mtime(timestamp_src)
 					File.utime(atime, mtime, dst_filename)
@@ -956,24 +993,6 @@ def dvd2mp4(vts_num)
 			end
 		end
 	else
-		cmd2[cmd2.index("<<startpoiont>>"), 1] = start_sec ? ["-ss", start_sec.round(3).to_s] : []
-		cmd2[cmd2.index("<<duration>>"), 1] = duration_sec ? ["-t", duration_sec.round(3).to_s] : []
-		dst_filename = dst_basename + ".mp4"
-		cmd2 += [dst_filename]
-
-		if $dryrun
-			p cmd2
-		else
-			system(*cmd2)
-			fail "#{$?}"  if $? != 0
-
-			if File.exist?(dst_filename)
-				timestamp_src = (ifofiles + vobfiles).first
-				atime = File.atime(timestamp_src)
-				mtime = File.mtime(timestamp_src)
-				File.utime(atime, mtime, dst_filename)
-			end
-		end
 	end
 end
 
@@ -1029,10 +1048,19 @@ def main(args)
 			$end_pos = nil
 		end
 
-		$split_chapter = false
-		opt.on("--[no-]split-chapter",
+		$output_chapters = nil
+		opt.on("--split-chapter[=n,n-n,...]", String,
 			"チャプターごとに分割して出力する") do |v|
-			$split_chapter = v
+			$output_chapters = (v || "").split(",").map do |c|
+				case c
+				when /^\s*(\d+)\s*$/
+					$1.to_i-1
+				when /^\s*(\d+)\s*-\s*(\d+)\s*$/
+					($1.to_i-1) .. ($2.to_i-1)
+				else
+					nil
+				end
+			end
 		end
 
 		$metadata[:album_name] = nil
