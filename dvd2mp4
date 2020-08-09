@@ -71,13 +71,13 @@ end
 
 def pos2sec(pos, fr=nil) # Rational(30000,1001)
 	case pos
-	when /^(\d+)f$/
+	when /^([+-]?\d+)f$/
 		return $1.to_f / fr
 	when /^(\d+):(\d+):(\d+(?:\.\d*)?)$/
 		return $1.to_i * 3600 + $2.to_i * 60 + $3.to_f
 	when /^(\d+):(\d+(?:\.\d*)?)$/
 		return $1.to_i * 60 + $2.to_f
-	when /^(\d+(?:\.\d*)?s?)$/
+	when /^([+-]?\d+(?:\.\d*)?s?)$/
 		return $1.to_f
 	else
 		fail "位置の指定が不正です: #{pos}"
@@ -217,96 +217,7 @@ def probe_vts_data(vts_num)
 		titles = []
 	end
 
-	# セル一覧を作成
-	cells = []
-	ctmap = {0 => 0.0}
-	titles.each do |title|
-		title[:cell].each do |cell|
-			if !cells.find { |c|
-				c[:first_sector] == cell[:first_sector] &&
-				c[:last_sector] == cell[:last_sector]
-			}
-				cells << {
-					ix: nil,
-					start: nil,
-					end: nil,
-					length: cell[:length],
-					first_sector: cell[:first_sector],
-					last_sector: cell[:last_sector],
-				}
-			end
-		end
-	end
-	cells.sort_by! { |c| c[:first_sector] }
-	# 先頭から順に開始位置と終了位置を特定
-	cells.each.with_index(1) do |cell, ix|
-		startsec = ctmap[cell[:first_sector]]
-		fail "セル情報が不連続のため、開始時刻を確定できません"  if !startsec
-		endsec = startsec + cell[:length]
-
-		cell[:ix] = ix
-		cell[:start] = startsec
-		ctmap[cell[:last_sector] + 1] = endsec
-		cell[:end] = endsec
-	end
-
-	# チャプター一覧を作成
-	chapters = []
-	titles.each do |title|
-		title[:chapter].each do |chapter|
-			cell = title[:cell][chapter[:startcell]-1]
-			if !chapters.find { |c|
-				c[:length] == chapter[:length] &&
-				c[:first_sector] == cell[:first_sector]
-			}
-				chapters << {
-					ix: nil,
-					title: title[:ix],
-					title_ix: chapter[:ix],
-					start: nil,
-					end: nil,
-					length: chapter[:length],
-					first_sector: cell[:first_sector],
-				}
-			end
-		end
-	end
-	chapters.sort_by! { |c| c[:first_sector] }
-	# チャプター開始位置,終了位置を決定
-	chapters.each.with_index(1) do |chapter, ix|
-		startsec = ctmap[chapter[:first_sector]]
-		fail "チャプター開始時刻を確定できません"  if !startsec
-		endsec = startsec + chapter[:length]
-
-		chapter[:ix] = ix
-		chapter[:start] = startsec
-		chapter[:end] = endsec
-	end
-	# 次のチャプターを突き抜けてしまっているチャプターを調整
-	chapters.each_with_index do |chapter, i|
-		next_chapter = chapters[i+1]
-		break  if !next_chapter
-
-		if chapter[:end] > next_chapter[:start]
-			chapter[:end] = next_chapter[:start]
-			chapter[:length] = chapter[:end] - chapter[:start]
-		end
-	end
-	# 指定長より短いチャプターを削除
-	prev_chapter = nil
-	chapters.each do |chapter|
-		if prev_chapter && chapter[:length] < $delete_chpt_sec
-			prev_chapter[:length] += chapter[:length]
-			prev_chapter[:end] += chapter[:length]
-			chapter[:start] += chapter[:length]
-			chapter[:length] = 0
-		else
-			prev_chapter = chapter
-		end
-	end
-	# 長さ0のチャプターを削除
-	chapters.delete_if { |c| c[:length] == 0 }
-
+	# ストリーム情報の取得
 	vobfiles, ifofiles = get_vobfiles(vts_num)
 
 	cmd1 = ["cat"]
@@ -328,9 +239,12 @@ def probe_vts_data(vts_num)
 	streams_a = []
 	streams_s = []
 	ffid = 0
+	streamids = {}
 	streams.each.with_index(1) do |stream, ix|
-		stream[:ix] = ix
 		fail "ffprobeでのストリーム番号に飛び番があります"  if stream[:index] != ix-1
+		stream[:ix] = ix
+		fail "ffprobeでのストリームIDに重複があります"  if streamids.include?(stream[:id].to_i(0))
+		streamids[stream[:id].to_i(0)] = true
 
 		case stream[:codec_type]
 		when "video"
@@ -390,6 +304,107 @@ def probe_vts_data(vts_num)
 			fail "不明なcodec_typeです: #{stream[:codec_type]}"
 		end
 	end
+
+	# セル一覧を作成
+	cells = []
+	ctmap = {0 => 0.0}
+	titles.each do |title|
+		title[:cell].each do |cell|
+			if !cells.find { |c|
+				c[:first_sector] == cell[:first_sector] &&
+				c[:last_sector] == cell[:last_sector]
+			}
+				cells << {
+					ix: nil,
+					start: nil,
+					end: nil,
+					length: cell[:length],
+					first_sector: cell[:first_sector],
+					last_sector: cell[:last_sector],
+				}
+			end
+		end
+	end
+	cells.sort_by! { |c| c[:first_sector] }
+	# 先頭から順に開始位置と終了位置を特定
+	cells.each.with_index(1) do |cell, ix|
+		startsec = ctmap[cell[:first_sector]]
+		fail "セル情報が不連続のため、開始時刻を確定できません"  if !startsec
+		endsec = startsec + cell[:length]
+
+		cell[:ix] = ix
+		cell[:start] = startsec
+		ctmap[cell[:last_sector] + 1] = endsec
+		cell[:end] = endsec
+	end
+
+	# chapter_offset を算出
+	framerate = Rational(streams_v.first[:avg_frame_rate])
+	chapter_offset = $chapter_offset ? pos2sec($chapter_offset, framerate) : 0
+
+	# チャプター一覧を作成
+	chapters = []
+	titles.each do |title|
+		title[:chapter].each do |chapter|
+			cell = title[:cell][chapter[:startcell]-1]
+			if !chapters.find { |c|
+				c[:length] == chapter[:length] &&
+				c[:first_sector] == cell[:first_sector]
+			}
+				chapters << {
+					ix: nil,
+					title_ix_in_vts: title[:ix],
+					chapter_ix_in_title: chapter[:ix],
+					start: nil,
+					end: nil,
+					length: chapter[:length],
+					first_sector: cell[:first_sector],
+				}
+			end
+		end
+	end
+	chapters.sort_by! { |c| c[:first_sector] }
+	# チャプター開始位置,終了位置を決定
+	chapters.each.with_index(1) do |chapter, ix|
+		startsec = ctmap[chapter[:first_sector]]
+		fail "チャプター開始時刻を確定できません"  if !startsec
+		endsec = startsec + chapter[:length]
+
+		startsec += chapter_offset
+		startsec = 0  if startsec < 0
+		endsec += chapter_offset
+		endsec = 0  if endsec < 0
+		length = endsec - startsec
+
+		chapter[:ix] = ix
+		chapter[:start] = startsec
+		chapter[:end] = endsec
+		chapter[:length] = length
+	end
+	# 次のチャプターを突き抜けてしまっているチャプターを調整
+	chapters.each_with_index do |chapter, i|
+		next_chapter = chapters[i+1]
+		break  if !next_chapter
+
+		if chapter[:end] > next_chapter[:start]
+			chapter[:end] = next_chapter[:start]
+			chapter[:length] = chapter[:end] - chapter[:start]
+		end
+	end
+	# 指定長より短いチャプターを削除
+	prev_chapter = nil
+	chapters.each do |chapter|
+		if prev_chapter && chapter[:length] < $delete_chpt_sec
+			prev_chapter[:length] += chapter[:length]
+			prev_chapter[:end] += chapter[:length]
+			chapter[:start] += chapter[:length]
+			chapter[:length] = 0
+		else
+			prev_chapter = chapter
+		end
+	end
+	# 長さ0のチャプターを削除
+	chapters.delete_if { |c| c[:length] == 0 }
 
 	return {
 		disc: disc,
@@ -805,9 +820,12 @@ def dvd2mp4(vts_num)
 
 				case $video_tune
 				when "animation"
-					filters_v << "fieldmatch" << "fps=fps=#{framerate24}:round=up"
+					filters_v << "fieldmatch"
+					filters_v << "bwdif=mode=send_frame:deint=interlaced"
+					filters_v << "fps=fps=#{framerate24}:round=#{$pullup24}"
 				else
-					filters_v << "pullup" << "fps=#{framerate24}"
+					filters_v << "pullup"
+					filters_v << "fps=fps=#{framerate24}:round=#{$pullup24}"
 				end
 			else
 				# インターレース解除
@@ -1019,7 +1037,7 @@ def main(args)
 		end
 
 		$output_chapters = nil
-		opt.on("--chapter-select[=n,n-n,...]", String,
+		opt.on("--chapter[=n,n-n,...]", String,
 			"出力するチャプターを指定する") do |v|
 			$output_chapters = (v || "").split(",").map do |c|
 				case c
@@ -1035,6 +1053,18 @@ def main(args)
 		opt.on("--[no-]split-chapter",
 			"チャプター毎に分割して出力する") do |v|
 			$output_chapters = v ? [] : nil
+		end
+
+		$delete_chpt_sec = 0
+		opt.on("--delete-short-chapter=n", Float,
+			"n秒より短いチャプターを削除する") do |v|
+			$delete_chpt_sec = (v<0) ? 0 : v
+		end
+
+		$chapter_offset = nil
+		opt.on("--chapter-offset=n", String,
+			"チャプターマークを全体的に移動する") do |v|
+			$chapter_offset = v
 		end
 
 		$metadata[:album_name] = nil
@@ -1083,22 +1113,16 @@ def main(args)
 			$metadata[:chapter_name] << v
 		end
 
-		$delete_chpt_sec = 0
-		opt.on("--delete-short-chapter=n", Float,
-			"n秒より短いチャプターを削除する") do |v|
-			$delete_chpt_sec = (v<0) ? 0 : v
-		end
-
 		$video_tune = nil
 		opt.on("--tune:v=str", String,
 			"ビデオの種類(film|animation|grain|stillimage...)") do |v|
 			$video_tune = v
 		end
 
-		$pullup24 = false
-		opt.on("--[no-]pullup24",
-			"24fps化する") do |v|
-			$pullup24 = v
+		$pullup24 = nil
+		opt.on("--pullup24[=round]", String,
+			"24fps化する(near|up|down...)") do |v|
+			$pullup24 = v || "near"
 		end
 
 		$force_deinterlace = nil
