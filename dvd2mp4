@@ -7,7 +7,7 @@
 # 2020/06/14 opa
 #----------------------------------------------------------------
 ProgName = "dvd2mp4"
-Version = "1.02"
+Version = "1.03"
 #=====dpk===== Copyright2020
 Copyright = "Copyright (c) 2020 by opa"
 #=====dpk=====
@@ -238,7 +238,6 @@ def probe_vts_data(vts_num)
 	streams_v = []
 	streams_a = []
 	streams_s = []
-	ffid = 0
 	streamids = {}
 	streams.each.with_index(1) do |stream, ix|
 		fail "ffprobeでのストリーム番号に飛び番があります"  if stream[:index] != ix-1
@@ -249,12 +248,8 @@ def probe_vts_data(vts_num)
 		case stream[:codec_type]
 		when "video"
 			streams_v << stream
-			stream[:ffid] = "0:#{ffid}"
-			ffid += 1
 		when "audio"
 			streams_a << stream
-			stream[:ffid] = "0:#{ffid}"
-			ffid += 1
 
 			streamid = stream[:id].to_i(0)
 			lsdvd = nil
@@ -276,8 +271,6 @@ def probe_vts_data(vts_num)
 			end
 		when "subtitle"
 			streams_s << stream
-			stream[:ffid] = "0:#{ffid}"
-			ffid += 1
 
 			streamid = stream[:id].to_i(0)
 			lsdvd = nil
@@ -298,8 +291,7 @@ def probe_vts_data(vts_num)
 				fail sprintf("言語コードが変換できません: %s", stream[:langcode])  if !LANGTABLE.include?(stream[:langcode])
 			end
 		when "data"
-			stream[:ffid] = "0:#{ffid}"
-			ffid += 1
+			# NOP
 		else
 			fail "不明なcodec_typeです: #{stream[:codec_type]}"
 		end
@@ -723,8 +715,8 @@ def dvd2mp4(vts_num)
 			cmd2 += ["-codec", "copy"]
 			cmd2 += ["-map", "0", "-map", "-0:d"]
 			cmd2 += ["-f", "vob"]
-			cmd2 += ["-ss", pd[:chapters].map{ |c| c[:start] }.min.to_s]
-			cmd2 += ["-to", pd[:chapters].map{ |c| c[:end] }.max.to_s]
+			# cmd2 += ["-ss", pd[:chapters].map{ |c| c[:start] }.min.to_s]
+			# cmd2 += ["-to", pd[:chapters].map{ |c| c[:end] }.max.to_s]
 			cmd2 += [vfile.path]
 
 			printf("Writing work VOB...\n")
@@ -775,15 +767,18 @@ def dvd2mp4(vts_num)
 		cmd += ["-probesize", FF_PROBESIZE]
 		cmd += ["-y"]  if $overwrite || $testmode
 		cmd += ["-ifo_palette", ifofile]  if ifofile && (streams_s_output >= 1)
+#		cmd += ["-ss", start_sec.to_s, "-copyts", "-avoid_negative_ts", "make_non_negative"]  if !$simple_concat
+		cmd += ["-ss", start_sec.to_s]  if !$simple_concat
 		cmd += ["-i", vobfile] # #0
 
 		if chapters_output >= 2
+			cmd += ["-ss", start_sec.to_s]  if !$simple_concat
 			cmd += ["-i", cfile.path] # #1
 			cmd += ["-map_chapters", "1"]
 		end
 
-		cmd += ["-ss", start_sec.to_s]
-		cmd += ["-to", end_sec.to_s]
+		cmd += ["-ss", start_sec.to_s]  if $simple_concat
+		cmd += ["-t", (end_sec - start_sec).to_s]
 		cmd += ["-f", "mp4"]
 		cmd += ["-movflags", "+faststart+disable_chpl"]
 		cmd += ["-metadata", "album=#{$metadata[:album_name]}"]  if $metadata[:album_name]
@@ -910,7 +905,7 @@ def dvd2mp4(vts_num)
 		pd[:streams_v].each do |stream|
 			next  if stream[:title] == "omit"
 
-			cmd += ["-map", stream[:ffid]]
+			cmd += ["-map", "##{stream[:id]}"]
 
 			if streams_v_output >= 2
 				cmd += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
@@ -924,7 +919,7 @@ def dvd2mp4(vts_num)
 		pd[:streams_a].each do |stream|
 			next  if stream[:title] == "omit"
 
-			cmd += ["-map", stream[:ffid]]
+			cmd += ["-map", "##{stream[:id]}"]
 
 			# if streams_a_output >= 2
 				cmd += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
@@ -938,7 +933,7 @@ def dvd2mp4(vts_num)
 		pd[:streams_s].each do |stream|
 			next  if stream[:title] == "omit"
 
-			cmd += ["-map", stream[:ffid]]
+			cmd += ["-map", "##{stream[:id]}"]
 
 			# if streams_s_output >= 2
 				cmd += ["-metadata:s:#{scount}", "language=#{stream[:lang]}"]
@@ -1231,7 +1226,7 @@ def main(args)
 		# 	$strict_length = v
 		# end
 
-		$simple_concat = true
+		$simple_concat = false
 		opt.on("--[no-]simple-concat",
 			"VOBファイルを単純結合する") do |v|
 			$simple_concat = v
