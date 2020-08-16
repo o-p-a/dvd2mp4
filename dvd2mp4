@@ -767,7 +767,6 @@ def dvd2mp4(vts_num)
 		cmd += ["-probesize", FF_PROBESIZE]
 		cmd += ["-y"]  if $overwrite || $testmode
 		cmd += ["-ifo_palette", ifofile]  if ifofile && (streams_s_output >= 1)
-#		cmd += ["-ss", start_sec.to_s, "-copyts", "-avoid_negative_ts", "make_non_negative"]  if !$simple_concat
 		cmd += ["-ss", start_sec.to_s]  if !$simple_concat
 		cmd += ["-i", vobfile] # #0
 
@@ -798,13 +797,6 @@ def dvd2mp4(vts_num)
 				cmd += ["-bufsize:v", "2.5M"]
 			end
 
-			# TODO:aspectはvfilterでやった方がシンプルにできるのでは
-			video_aspect = $video_aspect || pd[:streams_v].first[:display_aspect_ratio]
-			if $video_rotate == 90 || $video_rotate == 270
-				video_aspect = "#{$2}:#{$1}"  if video_aspect =~ /(\d+):(\d)+/
-			end
-			cmd += ["-aspect:v", video_aspect]
-
 			if $pullup24
 				# 24fpsに変換
 				if Rational(framerate).denominator == 1001
@@ -813,18 +805,12 @@ def dvd2mp4(vts_num)
 					framerate24 = "24"
 				end
 
-				case $video_tune
-				when "animation"
-					filters_v << "fieldmatch"
-					filters_v << "bwdif=mode=send_frame:deint=interlaced"
-					filters_v << "fps=fps=#{framerate24}:round=#{$pullup24}"
-				else
-					filters_v << "pullup"
-					filters_v << "fps=fps=#{framerate24}:round=#{$pullup24}"
-				end
+				filters_v << "fieldmatch"
+				filters_v << "bwdif=mode=send_frame:deint=interlaced"
+				filters_v << "fps=fps=#{framerate24}:round=#{$pullup24}"
 			else
 				# インターレース解除
-				if $force_deinterlace || (pd[:streams_v].first[:field_order] && pd[:streams_v].first[:field_order] != "progressive")
+				if $force_deinterlace || (vs1[:field_order] && vs1[:field_order] != "progressive")
 					filters_v << ($testmode ? "bwdif=mode=send_frame" : "bwdif=mode=send_field")
 				end
 			end
@@ -854,12 +840,14 @@ def dvd2mp4(vts_num)
 
 			# クリッピング
 			if $video_crop
-				crop_w = pd[:streams_v].first[:width] - $video_crop[2] - $video_crop[3]
-				crop_h = pd[:streams_v].first[:height] - $video_crop[0] - $video_crop[1]
+				in_w = vs1[:width]
+				in_h = vs1[:height]
+				crop_w = in_w - ($video_crop[2] + $video_crop[3])
+				crop_h = in_h - ($video_crop[0] + $video_crop[1])
 				crop_x = $video_crop[2]
 				crop_y = $video_crop[0]
-				filters_v << "crop=w=#{crop_w}:h=#{crop_h}:x=#{crop_x}:y=#{crop_y}"
-				filters_v << "scale=#{pd[:streams_v].first[:width]}:#{pd[:streams_v].first[:height]}"
+				filters_v << "crop=w=#{crop_w}:h=#{crop_h}:x=#{crop_x}:y=#{crop_y}:keep_aspect=1"
+				filters_v << "scale=w=#{in_w}:h=#{in_h}"
 			end
 
 			# 回転
@@ -870,6 +858,10 @@ def dvd2mp4(vts_num)
 				filters_v << "hflip" << "vflip"
 			when 270
 				filters_v << "transpose=cclock"
+			end
+
+			if $video_aspect
+				filters_v << "setdar=#{$video_aspect.gsub(":", "/")}"
 			end
 
 			cmd += ["-filter:v", filters_v.join(",")]  if filters_v.size > 0
@@ -946,34 +938,25 @@ def dvd2mp4(vts_num)
 
 		# TODO:サムネイル画像
 
-		# 出力ファイル名を決定
-		n = 1
-		while true
-			if n == 1
-				f = dst_basename + ".mp4"
-			else
-				f = dst_basename + " #{n}.mp4"
-			end
-
-			if !File.exist?(f)
-				dst_filename = f
-				break
-			end
-
-			n += 1
-		end
-
-		cmd += [dst_filename]
-
 		if $dryrun
+			cmd += [dst_basename + ".mp4"]
 			p cmd
 		else
+			# ユニークな出力ファイル名を決定
+			dst_filename = 1.step do |n|
+				f = dst_basename + (n == 1 ? "" : " #{n}") + ".mp4"
+				break f  if !File.exist?(f)
+			end
+
+			dst_filename2 = dst_filename
+			cmd += [dst_filename2]
 			system(*cmd)
 			fail "#{$?}"  if $? != 0
 
-			if File.exist?(dst_filename)
+			if File.exist?(dst_filename2)
 				timestamp_src = (pd[:ifofiles] + pd[:vobfiles]).first
-				File.utime(File.atime(timestamp_src), File.mtime(timestamp_src), dst_filename)
+				File.utime(File.atime(timestamp_src), File.mtime(timestamp_src), dst_filename2)
+#				File.rename(dst_filename2, dst_filename)
 			end
 		end
 	end
