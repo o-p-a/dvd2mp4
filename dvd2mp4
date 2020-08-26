@@ -7,7 +7,7 @@
 # 2020/06/14 opa
 #----------------------------------------------------------------
 ProgName = "dvd2mp4"
-Version = "1.03"
+Version = "1.04"
 #=====dpk===== Copyright2020
 Copyright = "Copyright (c) 2020 by opa"
 #=====dpk=====
@@ -321,7 +321,11 @@ def probe_vts_data(vts_num)
 	# 先頭から順に開始位置と終了位置を特定
 	cells.each.with_index(1) do |cell, ix|
 		startsec = ctmap[cell[:first_sector]]
-		fail "セル情報が不連続のため、開始時刻を確定できません"  if !startsec
+		if !startsec
+			startsec = ctmap.max[1]
+			ctmap[cell[:first_sector]] = startsec
+			printf("セル情報が不連続のため、開始時刻を確定できません\n")
+		end
 		endsec = startsec + cell[:length]
 
 		cell[:ix] = ix
@@ -569,30 +573,98 @@ end
 
 def dvd2mp4(vts_num)
 	pd = probe_vts_data(vts_num)
+	vs1 = pd[:streams_v].first
+	framerate = Rational(vs1[:avg_frame_rate])
+	vts_begin_sec = pd[:chapters].map{ |c| c[:start] }.min
+	vts_end_sec = pd[:chapters].map{ |c| c[:end] }.max
+	output_ranges = []
 
-	# 出力するチャプターの確定
-	output_chapters = []
-	if !$output_chapters
-		output_chapters << (0 .. pd[:chapters].length-1)
-	elsif $output_chapters.empty?
-		pd[:chapters].each_with_index do |chapter, i|
-			output_chapters << (i .. i)
-		end
-	else
-		$output_chapters.each do |oc|
-			if oc.is_a?(Range)
-				b = oc.begin.clamp(0, pd[:chapters].length-1)
-				e = oc.end.clamp(0, pd[:chapters].length-1)
-				output_chapters << (b .. e)
-			else
-				oc = oc.clamp(0, pd[:chapters].length-1)
-				output_chapters << (oc .. oc)
+	# 開始:終了位置を決定
+	start_offset = $start_pos ? pos2sec($start_pos, framerate) : vts_begin_sec
+	end_offset = $end_pos ? pos2sec($end_pos, framerate) : vts_end_sec
+	end_offset = start_offset + pos2sec($duration, framerate)  if $duration
+	end_offset = start_offset  if end_offset < start_offset
+
+	# 出力範囲がなにも指定されていない場合、# 最初から最後までを1つの塊で出力
+	if !$output_chapters && !$output_ranges
+		output_ranges << (vts_begin_sec .. vts_end_sec)
+	end
+
+	# チャプター単位の出力範囲が指定されている場合
+	if $output_chapters
+		if $output_chapters.empty? # 最初から最後までをチャプター毎にバラバラで出力
+			pd[:chapters].each do |chapter|
+				output_ranges << (chapter[:start] .. chapter[:end])
+			end
+		else # 指定されたとおりに出力
+			$output_chapters.each do |oc|
+				if oc.is_a?(Range)
+					b = oc.begin
+					e = oc.end
+				else
+					b = e = oc
+				end
+				# チャプター番号を上限下限におさめる
+				b = b.clamp(0, pd[:chapters].length-1)
+				e = e.clamp(0, pd[:chapters].length-1)
+				# チャプター番号から秒へ変換
+				b = pd[:chapters][b][:start]
+				e = pd[:chapters][e][:end]
+				output_ranges << (b .. e)
 			end
 		end
 	end
 
-	if output_chapters.length < 1
-		fail "出力対象のチャプターがひとつもありません"
+	# 秒単位の出力範囲が指定されている場合
+	if $output_ranges
+		$output_ranges.each do |range|
+			if range =~ /^(.*)-(.*)$/
+				b = pos2sec($1, framerate)
+				e = pos2sec($2, framerate)
+			else
+				b = pos2sec(range, framerate)
+				e = vts_end_sec
+			end
+			b = b.clamp(vts_begin_sec, vts_end_sec)
+			e = e.clamp(vts_begin_sec, vts_end_sec)
+			output_ranges << (b .. e)
+		end
+	end
+
+	# 開始時刻順に並べ替え
+	output_ranges.sort_by! { |r| r.begin }
+
+	# 次の出力範囲を突き抜けてしまっているものを調整
+	r_limit = vts_end_sec
+	work_ranges = []
+	output_ranges.reverse_each do |r|
+		work_ranges << (r.begin .. (r.end > r_limit ? r_limit : r.end))
+		r_limit = r.begin
+	end
+	output_ranges.replace(work_ranges)
+	output_ranges.sort_by! { |r| r.begin }
+
+	# 開始:終了位置のオフセット調整
+	output_ranges.map! do |r|
+		b = r.begin + start_offset
+		if b > r.end
+			b = r.end
+		end
+		e = r.end
+		if (r.end - r.begin) > end_offset
+			e = r.begin + end_offset
+		end
+		if e < b
+			e = b
+		end
+		(b .. e)
+	end
+
+	# 長さ0の範囲を削除
+	output_ranges.delete_if { |r| r.begin >= r.end }
+
+	if output_ranges.length < 1
+		fail "出力対象範囲が指定されていません"
 	end
 
 	# ファイルのメタ情報を決定
@@ -619,17 +691,6 @@ def dvd2mp4(vts_num)
 	end
 	if $testmode
 		dst_basename = "(test)" + dst_basename
-	end
-
-	# 開始:終了位置を決定
-	framerate = Rational(pd[:streams_v].first[:avg_frame_rate])
-	opt_start_sec = $start_pos ? pos2sec($start_pos, framerate) : 0
-	if $duration
-		opt_end_sec = opt_start_sec + pos2sec($duration, framerate)
-	elsif $end_pos
-		opt_end_sec = pos2sec($end_pos, framerate)
-	else
-		opt_end_sec = 60*60*24
 	end
 
 	# ストリームのメタ情報を決定
@@ -687,18 +748,18 @@ def dvd2mp4(vts_num)
 	streams_a_output = pd[:streams_a].count { |s| s[:title] != "omit" }
 	streams_s_output = pd[:streams_s].count { |s| s[:title] != "omit" }
 
+	codec_count = {}
 	# 対象VOB,IFOの決定 & ワークVOBの作成
 	if $dryrun
 		vobfile = pd[:vobfiles].first
 	else
-		vfile = Tempfile.new(["dvd2mp4", ".vob"])
-		vobfile = vfile.path
+		vobfile = Tempfile.new(["dvd2mp4", ".vob"]).path
 
 		if $simple_concat
 			cmd = ["cat"]
 			cmd += pd[:vobfiles]
 			printf("Writing work VOB(simple)...\n")
-			system(*cmd, out:vfile.path)
+			system(*cmd, out:vobfile)
 			fail "#{$?}"  if $? != 0
 			printf("...Complete.\n")
 		else
@@ -715,29 +776,39 @@ def dvd2mp4(vts_num)
 			cmd2 += ["-codec", "copy"]
 			cmd2 += ["-map", "0", "-map", "-0:d"]
 			cmd2 += ["-f", "vob"]
-			# cmd2 += ["-ss", pd[:chapters].map{ |c| c[:start] }.min.to_s]
-			# cmd2 += ["-to", pd[:chapters].map{ |c| c[:end] }.max.to_s]
-			cmd2 += [vfile.path]
+			cmd2 += [vobfile]
 
 			printf("Writing work VOB...\n")
 			Open3.pipeline(cmd1, cmd2)
 			# fail "#{$?}"  if $? != 0
 			printf("...Complete.\n")
+
+			# 巻き直すとStream IDが変わるので調整
+			pd[:streams_a].each do |stream|
+				src_sid = stream[:id]
+				codec_count[stream[:codec_name]] ||= 0
+				case stream[:codec_name]
+				when "ac3"
+					new_sid = sprintf("0x%02x", 0x80 + codec_count["ac3"])
+				when "dts"
+					new_sid = sprintf("0x%02x", 0x88 + codec_count["dts"])
+				else
+					fail "想定外のオーディオコーデック : #{stream[:codec_name]}"
+				end
+
+				stream[:id] = new_sid
+
+				codec_count[stream[:codec_name]] += 1
+			end
 		end
 	end
 
 	ifofile = pd[:ifofiles].first
 
 	# 変換メインループ
-	output_chapters.each do |output_chapter|
-		start_sec = pd[:chapters][output_chapter.begin][:start]
-		start_sec += opt_start_sec
-
-		if (pd[:chapters][output_chapter.begin][:start] + opt_end_sec) < pd[:chapters][output_chapter.end][:end]
-			end_sec = pd[:chapters][output_chapter.begin][:start] + opt_end_sec
-		else
-			end_sec = pd[:chapters][output_chapter.end][:end]
-		end
+	output_ranges.each do |output_range|
+		start_sec = output_range.begin
+		end_sec = output_range.end
 
 		# チャプター情報ファイルを作成
 		chapters_output = 0
@@ -1014,10 +1085,26 @@ def main(args)
 			$end_pos = nil
 		end
 
+		$output_ranges = nil
+		opt.on("--split-at=n,n-n,...", String,
+			"出力する範囲を指定する") do |v|
+			$output_ranges = v.split(",").map do |r|
+				case r
+				when /^(.*)-(.*)$/
+					pos2sec($1, 30)
+					pos2sec($2, 30)
+					r
+				else
+					pos2sec(r, 30)
+					r
+				end
+			end
+		end
+
 		$output_chapters = nil
-		opt.on("--chapter[=n,n-n,...]", String,
+		opt.on("--chapter=n,n-n,...", String,
 			"出力するチャプターを指定する") do |v|
-			$output_chapters = (v || "").split(",").map do |c|
+			$output_chapters = v.split(",").map do |c|
 				case c
 				when /^\s*(\d+)\s*$/
 					$1.to_i-1
@@ -1257,7 +1344,7 @@ def main(args)
 		end
 
 		if $testmode
-			# $crf_base = 36.0
+			$crf_base = 26.0
 			$flac_audio = false
 			$quality_v = "l"
 			$quality_a = "l"
