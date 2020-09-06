@@ -641,8 +641,8 @@ def dvd2mp4(vts_num)
 		work_ranges << (r.begin .. (r.end > r_limit ? r_limit : r.end))
 		r_limit = r.begin
 	end
+	work_ranges.sort_by! { |r| r.begin }
 	output_ranges.replace(work_ranges)
-	output_ranges.sort_by! { |r| r.begin }
 
 	# 開始:終了位置のオフセット調整
 	output_ranges.map! do |r|
@@ -917,8 +917,10 @@ def dvd2mp4(vts_num)
 				crop_h = in_h - ($video_crop[0] + $video_crop[1])
 				crop_x = $video_crop[2]
 				crop_y = $video_crop[0]
+				out_w = in_w
+				out_h = (crop_h > 360) ? in_h : 360
 				filters_v << "crop=w=#{crop_w}:h=#{crop_h}:x=#{crop_x}:y=#{crop_y}:keep_aspect=1"
-				filters_v << "scale=w=#{in_w}:h=#{in_h}"
+				filters_v << "scale=w=#{out_w}:h=#{out_h}"
 			end
 
 			# 回転
@@ -931,6 +933,7 @@ def dvd2mp4(vts_num)
 				filters_v << "transpose=cclock"
 			end
 
+			# アスペクト比
 			if $video_aspect
 				filters_v << "setdar=#{$video_aspect.gsub(":", "/")}"
 			end
