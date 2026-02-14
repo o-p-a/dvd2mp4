@@ -4,7 +4,7 @@
 #----------------------------------------------------------------
 # DVD IFO VOBをmp4に変換する
 #
-# 2020/06/14 opa
+# 2020/06/14 opa⁠🙂
 #----------------------------------------------------------------
 ProgName = "dvd2mp4"
 Version = "1.04"
@@ -738,7 +738,6 @@ def dvd2mp4(vts_num)
 		title = $metadata[:chapter_name][ix]
 		if !title
 			$stdout.printf("チャプター #{ix+1} のタイトルが指定されていません\n")
-			# title = "Chapter #{ix+1}"
 		end
 		chapter[:title] = title
 	end
@@ -823,7 +822,7 @@ def dvd2mp4(vts_num)
 			cfile.printf("TIMEBASE=1/1000000\n")
 			cfile.printf("START=%d\n", chapter[:start] * 1000000)
 			cfile.printf("END=%d\n", chapter[:end] * 1000000)
-			cfile.printf("title=%s\n", chapter[:title] || "Chapter")
+			cfile.printf("title=%s\n", chapter[:title] || "Chapter #{ix}")
 
 			chapters_output += 1
 		end
